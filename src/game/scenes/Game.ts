@@ -1,0 +1,437 @@
+import { Scene } from "phaser";
+import { EventBus } from "../EventBus";
+import { Building } from "../Building";
+import { House } from "../House";
+import { Worker } from "../Worker";
+import { Path } from "../Path";
+
+export class Game extends Scene {
+    camera: Phaser.Cameras.Scene2D.Camera;
+    background: Phaser.GameObjects.Image;
+    gameText: Phaser.GameObjects.Text;
+    controls?: Phaser.Types.Input.Keyboard.CursorKeys;
+
+    public buildings: Building[] = [];
+    public houses: House[] = [];
+    private workers: Worker[] = [];
+    private isDrawing: boolean = false;
+    private isDeleting: boolean = false;
+    private shadowPath: Phaser.GameObjects.Rectangle | null = null;
+    private shadowLine: Phaser.GameObjects.Line | null = null;
+    private dragStartGrid: { x: number, y: number } | null = null;
+    private lastSpawnTime: number = 0; // For worker spawning
+    private lastStructureSpawnTime: number = 0; // For houses/buildings
+    private isSpawningPaused: boolean = false;
+    private structureSpawnCounter: number = 0;
+    private colorPalette: number[] = [
+        0xef4444, // Red
+        0x3b82f6, // Blue
+        0xfacc15, // Yellow
+        0x10b981, // Green
+        0xa855f7, // Purple
+    ];
+
+    constructor() {
+        super("Game");
+    }
+
+    create() {
+        this.camera = this.cameras.main;
+        this.camera.setBackgroundColor("#779944"); // Warm earthy base (match tiny-yurts #794)
+
+        // Disable right-click context menu
+        this.input.mouse?.disableContextMenu();
+
+        // Add game grid
+        this.add
+            .grid(
+                0,
+                0,
+                1024,
+                768,
+                Building.GRID_SIZE,
+                Building.GRID_SIZE,
+                0x000000,
+                0.1,
+            )
+            .setDepth(0)
+            .setOrigin(0, 0);
+
+        Path.init(this);
+
+        // Random initial placement
+        this.spawnRandomStructure();
+
+        if (this.input.keyboard) {
+            this.controls = this.input.keyboard.addKeys({
+                up: Phaser.Input.Keyboard.KeyCodes.W,
+                down: Phaser.Input.Keyboard.KeyCodes.S,
+                left: Phaser.Input.Keyboard.KeyCodes.A,
+                right: Phaser.Input.Keyboard.KeyCodes.D,
+            }) as Phaser.Types.Input.Keyboard.CursorKeys;
+        }
+
+        this.input.on(
+            "wheel",
+            (
+                _pointer: Phaser.Input.Pointer,
+                _gameObjects: any,
+                _deltaX: number,
+                deltaY: number,
+                _deltaZ: number,
+            ) => {
+                const zoomSpeed = 0.001;
+                const newZoom = this.camera.zoom - deltaY * zoomSpeed;
+                this.camera.setZoom(Phaser.Math.Clamp(newZoom, 0.1, 4));
+            },
+        );
+
+        this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+            const worldPointer = this.camera.getWorldPoint(pointer.x, pointer.y);
+            const gx = Math.floor(worldPointer.x / Building.GRID_SIZE);
+            const gy = Math.floor(worldPointer.y / Building.GRID_SIZE);
+
+            if (pointer.leftButtonDown()) {
+                // If there's a house here, we don't return early; we allow starting a drag
+                // to rotate it or draw from its driveway.
+                const isOccupiedByStructure = this.isGridOccupied(gx, gy);
+                const house = this.getHouseAt(gx, gy);
+                
+                if (isOccupiedByStructure && !house) return;
+
+                this.isDrawing = true;
+                this.isDeleting = false;
+                this.dragStartGrid = { x: gx, y: gy };
+                
+                this.updateShadowPath(gx, gy);
+                // Only add path if not on a structure footprint
+                if (!isOccupiedByStructure) {
+                    this.addPathAtGrid(gx, gy);
+                }
+            } else if (pointer.rightButtonDown()) {
+                this.isDeleting = true;
+                this.isDrawing = false;
+                this.removePathAtGrid(gx, gy);
+            }
+        });
+
+        this.input.on("pointermove", (pointer: Phaser.Input.Pointer) => {
+            const worldPointer = this.camera.getWorldPoint(pointer.x, pointer.y);
+            const gx = Math.floor(worldPointer.x / Building.GRID_SIZE);
+            const gy = Math.floor(worldPointer.y / Building.GRID_SIZE);
+
+            if (this.isDrawing && this.dragStartGrid) {
+                this.updateShadowPath(gx, gy);
+                
+                const dx = gx - this.dragStartGrid.x;
+                const dy = gy - this.dragStartGrid.y;
+
+                // Stop if we moved too far (more than 1 cell in any direction)
+                if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+                    return;
+                }
+
+                if (gx !== this.dragStartGrid.x || gy !== this.dragStartGrid.y) {
+                    // Check if we are dragging out of a house to rotate it
+                    const startHouse = this.getHouseAt(this.dragStartGrid.x, this.dragStartGrid.y);
+                    if (startHouse) {
+                        const dx = gx - this.dragStartGrid.x;
+                        const dy = gy - this.dragStartGrid.y;
+                        let dir: any = null;
+
+                        if (dx > 0 && dy === 0) dir = "right";
+                        else if (dx < 0 && dy === 0) dir = "left";
+                        else if (dx === 0 && dy > 0) dir = "down";
+                        else if (dx === 0 && dy < 0) dir = "up";
+                        else if (dx > 0 && dy > 0) dir = "down-right";
+                        else if (dx > 0 && dy < 0) dir = "up-right";
+                        else if (dx < 0 && dy > 0) dir = "down-left";
+                        else if (dx < 0 && dy < 0) dir = "up-left";
+                        
+                        if (dir) {
+                            startHouse.setDirection(dir);
+                        }
+                    }
+
+                    if (!this.isGridOccupied(gx, gy) && this.isPastHalfwayInto(worldPointer, this.dragStartGrid, { x: gx, y: gy })) {
+                        this.addPathAtGrid(gx, gy);
+                        this.dragStartGrid = { x: gx, y: gy };
+                    }
+                }
+            } else if (this.isDeleting) {
+                this.removePathAtGrid(gx, gy);
+            }
+        });
+
+        this.input.on("pointerup", () => {
+            this.isDrawing = false;
+            this.isDeleting = false;
+            this.dragStartGrid = null;
+            if (this.shadowPath) this.shadowPath.setVisible(false);
+            if (this.shadowLine) this.shadowLine.setVisible(false);
+        });
+
+        EventBus.emit("current-scene-ready", this);
+    }
+
+    private updateShadowPath(gx: number, gy: number) {
+        if (!this.shadowPath) {
+            this.shadowPath = this.add.rectangle(0, 0, Building.GRID_SIZE, Building.GRID_SIZE, 0xdca26f, 0.2);
+            this.shadowPath.setOrigin(0, 0);
+            this.shadowPath.setDepth(2);
+        }
+        this.shadowPath.setPosition(gx * Building.GRID_SIZE, gy * Building.GRID_SIZE);
+        const occupied = this.isGridOccupied(gx, gy);
+        this.shadowPath.setVisible(!occupied);
+
+        // Add a line connecting drag start to current shadow
+        if (this.dragStartGrid) {
+            if (!this.shadowLine) {
+                this.shadowLine = this.add.line(0, 0, 0, 0, 0, 0, 0xdca26f, 0.5);
+                this.shadowLine.setLineWidth(12);
+                this.shadowLine.setDepth(2);
+                this.shadowLine.setAlpha(0.5);
+            }
+            const x1 = (this.dragStartGrid.x + 0.5) * Building.GRID_SIZE;
+            const y1 = (this.dragStartGrid.y + 0.5) * Building.GRID_SIZE;
+            const x2 = (gx + 0.5) * Building.GRID_SIZE;
+            const y2 = (gy + 0.5) * Building.GRID_SIZE;
+            this.shadowLine.setTo(x1, y1, x2, y2);
+            this.shadowLine.setVisible(!occupied);
+        }
+    }
+
+    private getHouseAt(gx: number, gy: number): House | undefined {
+        return this.houses.find(h => {
+            const hw = Math.floor(h.width / 32);
+            const hh = Math.floor(h.height / 32);
+            return gx >= h.gridX && gx < h.gridX + hw && gy >= h.gridY && gy < h.gridY + hh;
+        });
+    }
+
+    private isGridOccupied(gx: number, gy: number, includePaths: boolean = false): boolean {
+        const inBuilding = this.buildings.some(b => {
+            const bw = Math.floor(b.width / 32);
+            const bh = Math.floor(b.height / 32);
+            return gx >= b.gridX && gx < b.gridX + bw && gy >= b.gridY && gy < b.gridY + bh;
+        });
+        const inHouse = this.houses.some(h => {
+            const hw = Math.floor(h.width / 32);
+            const hh = Math.floor(h.height / 32);
+            return gx >= h.gridX && gx < h.gridX + hw && gy >= h.gridY && gy < h.gridY + hh;
+        });
+        
+        if (includePaths && Path.isAt(gx, gy)) {
+            return true;
+        }
+
+        return inBuilding || inHouse;
+    }
+
+    private isPastHalfwayInto(pointer: { x: number, y: number }, from: { x: number, y: number }, to: { x: number, y: number }): boolean {
+        const centerX = (from.x + 0.5) * Building.GRID_SIZE;
+        const centerY = (from.y + 0.5) * Building.GRID_SIZE;
+        
+        const dx = pointer.x - centerX;
+        const dy = pointer.y - centerY;
+        
+        const cellSize = Building.GRID_SIZE;
+        const fuzzyness = 8; // Pixels slack
+        const threshold = cellSize - fuzzyness;
+
+        const moveX = to.x - from.x;
+        const moveY = to.y - from.y;
+
+        // Using tiny-yurts style math for directional thresholds
+        if (moveX === 0) { // Vertical
+            return moveY > 0 ? (dy > threshold) : (dy < -threshold);
+        }
+        if (moveY === 0) { // Horizontal
+            return moveX > 0 ? (dx > threshold) : (dx < -threshold);
+        }
+        
+        // Diagonal connections need more travel distance to "feel" right
+        // Sum of horizontal and vertical distance relative to center
+        const diagThreshold = cellSize * 2 - fuzzyness;
+        if (moveX > 0 && moveY > 0) return (dx + dy) > diagThreshold; 
+        if (moveX > 0 && moveY < 0) return (dx - dy) > diagThreshold;
+        if (moveX < 0 && moveY > 0) return (-dx + dy) > diagThreshold;
+        if (moveX < 0 && moveY < 0) return (-dx - dy) > diagThreshold;
+
+        return false;
+    }
+
+    private addPathAtGrid(gridX: number, gridY: number) {
+        if (!this.dragStartGrid) return;
+        if (this.dragStartGrid.x === gridX && this.dragStartGrid.y === gridY) return;
+
+        if (this.isGridOccupied(gridX, gridY)) return;
+
+        Path.add(this, this.dragStartGrid.x, this.dragStartGrid.y, gridX, gridY);
+    }
+
+    private removePathAtGrid(gridX: number, gridY: number) {
+        Path.removeAt(gridX, gridY);
+    }
+
+    update(time: number, delta: number) {
+        if (!this.controls) {
+            return;
+        }
+
+        const speed = 10;
+        if (this.controls.left.isDown) {
+            this.camera.scrollX -= speed;
+        } else if (this.controls.right.isDown) {
+            this.camera.scrollX += speed;
+        }
+
+        if (this.controls.up.isDown) {
+            this.camera.scrollY -= speed;
+        } else if (this.controls.down.isDown) {
+            this.camera.scrollY += speed;
+        }
+
+        // Cleanup despawned workers
+        this.workers = this.workers.filter(w => !w.isDespawned);
+
+        // Update workers
+        this.workers.forEach((w) => w.update(time, delta));
+
+        // Spawn structures every 5 seconds (if not paused)
+        if (!this.isSpawningPaused && time > this.lastStructureSpawnTime + 5000) {
+            this.spawnRandomStructure();
+            this.lastStructureSpawnTime = time;
+        }
+
+        // Spawn workers for demand
+        this.assignTasks(time);
+    }
+
+    private assignTasks(time: number) {
+        // Global throttle: 100ms between any worker spawning on the map
+        if (time < this.lastSpawnTime + 100) return;
+
+        const assignedPinKeys = new Set(
+            this.workers.map(w => w.getTargetPinKey()).filter(k => k !== null) as string[]
+        );
+
+        const houseWorkerCounts = new Map<House, number>();
+        this.workers.forEach(w => {
+            const h = w.getHomeHouse();
+            houseWorkerCounts.set(h, (houseWorkerCounts.get(h) || 0) + 1);
+        });
+
+        for (const building of this.buildings) {
+            if (building.hasDemand) {
+                const pinLocations = building.getAvailablePinLocations();
+                for (const loc of pinLocations) {
+                    const pinKey = `${loc.x},${loc.y}`;
+                    
+                    if (!assignedPinKeys.has(pinKey)) {
+                        for (const house of this.houses) {
+                            // Per-house throttle: 1s between workers from the same house
+                            if (time < house.lastSpawnTime + 1000) continue;
+
+                            const currentCount = houseWorkerCounts.get(house) || 0;
+                            if (currentCount >= 2) continue;
+
+                            // Color match check: house must match building
+                            if (house.bodyColor !== building.bodyColor) continue;
+
+                            const tempWorker = new Worker(this, house);
+                            if (tempWorker.canReach(loc.x, loc.y, building)) {
+                                tempWorker.setTargetBuilding(building, loc.x, loc.y);
+                                this.workers.push(tempWorker);
+                                assignedPinKeys.add(pinKey);
+                                houseWorkerCounts.set(house, currentCount + 1);
+                                
+                                this.lastSpawnTime = time;
+                                house.lastSpawnTime = time;
+                                
+                                // We spawned one, move to the next pin (or stop for this frame if we want strict staggering)
+                                // To respect the global 100ms throttle, we must return here.
+                                return; 
+                            } else {
+                                // IMPORTANT: Destroy the temp objects if no path is found
+                                tempWorker.destroy();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private spawnRandomStructure() {
+        const gridW = 32;
+        const gridH = 24;
+        const directions: ("up" | "down" | "left" | "right")[] = ["up", "down", "left", "right"];
+
+        // Sequence: House, House, Building
+        // This gives us a 2:1 ratio so we have enough workers for the big buildings
+        const isHouse = (this.structureSpawnCounter % 3) < 2;
+        const w = isHouse ? 1 : 2;
+        const h = isHouse ? 1 : 3;
+
+        // Pick color based on the number of building sets spawned so far
+        const colorIndex = Math.floor(this.structureSpawnCounter / 3) % this.colorPalette.length;
+        const structureColor = this.colorPalette[colorIndex];
+
+        // Try a few times to find a spot
+        for (let i = 0; i < 30; i++) {
+            const entranceDir = directions[Math.floor(Math.random() * directions.length)];
+
+            // Random position within bounds
+            const gx = Math.floor(Math.random() * (gridW - w));
+            const gy = Math.floor(Math.random() * (gridH - h));
+
+            // Check driveway bounds
+            let drivewayX = gx;
+            let drivewayY = gy;
+            if (entranceDir === "down") { drivewayY = gy + h; }
+            else if (entranceDir === "up") { drivewayY = gy - 1; }
+            else if (entranceDir === "left") { drivewayX = gx - 1; }
+            else if (entranceDir === "right") { drivewayX = gx + w; }
+
+            if (drivewayX < 0 || drivewayX >= gridW || drivewayY < 0 || drivewayY >= gridH) continue;
+
+            // Check if footprint + driveway + buffer is clear
+            let conflict = false;
+            // Footprint check
+            for (let ox = -1; ox <= w; ox++) {
+                for (let oy = -1; oy <= h; oy++) {
+                    if (this.isGridOccupied(gx + ox, gy + oy, true)) {
+                        conflict = true; break;
+                    }
+                }
+                if (conflict) break;
+            }
+            if (conflict) continue;
+
+            // Driveway check
+            if (this.isGridOccupied(drivewayX, drivewayY, true)) continue;
+
+            // No conflict! Spawn it
+            if (isHouse) {
+                const house = new House(this, gx, gy, 1, 1, structureColor, entranceDir as any);
+                this.houses.push(house);
+            } else {
+                const building = new Building(this, gx, gy, 2, 3, structureColor, entranceDir as any);
+                this.buildings.push(building);
+            }
+            console.log(`Spawned ${isHouse ? "House" : "Building"} at ${gx}, ${gy} facing ${entranceDir}`);
+            this.structureSpawnCounter++;
+            return;
+        }
+    }
+
+    public toggleSpawning() {
+        this.isSpawningPaused = !this.isSpawningPaused;
+        return this.isSpawningPaused;
+    }
+
+    changeScene() {
+        this.scene.start("GameOver");
+    }
+}
