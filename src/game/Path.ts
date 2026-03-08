@@ -14,10 +14,27 @@ export class Path {
     public isFixture: boolean = false;
 
     public static isAt(gridX: number, gridY: number): boolean {
-        return this.paths.some(p => 
-            (p.points[0].x === gridX && p.points[0].y === gridY) ||
-            (p.points[1].x === gridX && p.points[1].y === gridY)
-        );
+        return this.paths.some(p => {
+            // Standard node check
+            if ((p.points[0].x === gridX && p.points[0].y === gridY) ||
+                (p.points[1].x === gridX && p.points[1].y === gridY)) {
+                return true;
+            }
+            // Diagonal clipping check: if the path is diagonal (e.g., (0,0) to (1,1)),
+            // it visually and logically "occupies" the corners (0,1) and (1,0) for building.
+            const x1 = p.points[0].x;
+            const y1 = p.points[0].y;
+            const x2 = p.points[1].x;
+            const y2 = p.points[1].y;
+            const dx = Math.abs(x1 - x2);
+            const dy = Math.abs(y1 - y2);
+            if (dx === 1 && dy === 1) {
+                if ((gridX === x1 && gridY === y2) || (gridX === x2 && gridY === y1)) {
+                    return true;
+                }
+            }
+            return false;
+        });
     }
 
     public static isIntersection(gx: number, gy: number): boolean {
@@ -155,10 +172,8 @@ export class Path {
         const g = this.graphics;
         g.clear();
         if (this.paths.length === 0) {
-            console.log("Path.render called but paths array is empty");
             return;
         }
-        console.log(`Path.render: drawing ${this.paths.length} paths`);
 
         const pathColor = 0xdca26f;
         const outlineColor = 0xffffff;
@@ -166,75 +181,21 @@ export class Path {
         const outlineWidth = 24;
         const size = 32;
 
-        const segments: { x1: number; y1: number; x2: number; y2: number }[] =
-            [];
-        const curves: { curve: Phaser.Curves.QuadraticBezier }[] = [];
-
-        const cornerNodes = new Map<
-            string,
-            { cx: number; cy: number; n1k: string; n2k: string }
-        >();
-        this.connectivityGraph.forEach((neighbors, key) => {
-            if (neighbors.size === 2) {
-                const [n1k, n2k] = Array.from(neighbors);
-                const [gx, gy] = key.split(",").map(Number);
-                cornerNodes.set(key, {
-                    cx: (gx + 0.5) * size,
-                    cy: (gy + 0.5) * size,
-                    n1k,
-                    n2k,
-                });
-            }
-        });
-
-        this.paths.forEach((p) => {
-            const k1 = `${p.points[0].x},${p.points[0].y}`;
-            const k2 = `${p.points[1].x},${p.points[1].y}`;
-            const c1 = cornerNodes.get(k1);
-            const c2 = cornerNodes.get(k2);
-
-            let x1 = (p.points[0].x + 0.5) * size;
-            let y1 = (p.points[0].y + 0.5) * size;
-            let x2 = (p.points[1].x + 0.5) * size;
-            let y2 = (p.points[1].y + 0.5) * size;
-
-            if (c1) {
-                x1 = (x1 + x2) / 2;
-                y1 = (y1 + y2) / 2;
-            }
-            if (c2) {
-                x2 = (x2 + x1) / 2;
-                y2 = (y2 + y1) / 2;
-            }
-            segments.push({ x1, y1, x2, y2 });
-        });
-
-        cornerNodes.forEach((data) => {
-            const [n1x, n1y] = data.n1k.split(",").map(Number);
-            const [n2x, n2y] = data.n2k.split(",").map(Number);
-            const m1x = (data.cx + (n1x + 0.5) * size) / 2;
-            const m1y = (data.cy + (n1y + 0.5) * size) / 2;
-            const m2x = (data.cx + (n2x + 0.5) * size) / 2;
-            const m2y = (data.cy + (n2y + 0.5) * size) / 2;
-            curves.push({
-                curve: new Phaser.Curves.QuadraticBezier(
-                    new Phaser.Math.Vector2(m1x, m1y),
-                    new Phaser.Math.Vector2(data.cx, data.cy),
-                    new Phaser.Math.Vector2(m2x, m2y),
-                ),
-            });
-        });
-
         const drawPass = (w: number, color: number) => {
             g.lineStyle(w, color, 1);
-            segments.forEach((s) => g.lineBetween(s.x1, s.y1, s.x2, s.y2));
-            curves.forEach((c) => c.curve.draw(g, 16));
-            this.connectivityGraph.forEach((neighbors, key) => {
-                if (neighbors.size !== 2) {
-                    const [gx, gy] = key.split(",").map(Number);
-                    g.fillStyle(color, 1);
-                    g.fillCircle((gx + 0.5) * size, (gy + 0.5) * size, w / 2);
-                }
+            this.paths.forEach((p) => {
+                const x1 = (p.points[0].x + 0.5) * size;
+                const y1 = (p.points[0].y + 0.5) * size;
+                const x2 = (p.points[1].x + 0.5) * size;
+                const y2 = (p.points[1].y + 0.5) * size;
+                g.lineBetween(x1, y1, x2, y2);
+            });
+
+            // Draw circles at all nodes to make corners look joined
+            this.connectivityGraph.forEach((_neighbors, key) => {
+                const [gx, gy] = key.split(",").map(Number);
+                g.fillStyle(color, 1);
+                g.fillCircle((gx + 0.5) * size, (gy + 0.5) * size, w / 2);
             });
         };
 

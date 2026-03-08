@@ -151,7 +151,18 @@ export class Game extends Scene {
                         if (dir) {
                             // Only rotate if the target grid cell is clear of other houses/buildings
                             if (!this.isGridOccupied(gx, gy, false)) {
-                                startHouse.setDirection(dir);
+                                // Diagonal clipping check for house driveway
+                                let canRotate = true;
+                                if (dir.includes("-")) { // Diagonal directions have '-' like 'up-left'
+                                    if (this.isGridOccupied(startHouse.gridX, gy) || 
+                                        this.isGridOccupied(gx, startHouse.gridY)) {
+                                        canRotate = false;
+                                    }
+                                }
+                                
+                                if (canRotate) {
+                                    startHouse.setDirection(dir);
+                                }
                             }
                         }
                     }
@@ -266,11 +277,22 @@ export class Game extends Scene {
 
     private addPathAtGrid(gridX: number, gridY: number) {
         if (!this.dragStartGrid) return;
-        if (this.dragStartGrid.x === gridX && this.dragStartGrid.y === gridY) return;
+        const x1 = this.dragStartGrid.x;
+        const y1 = this.dragStartGrid.y;
+        const x2 = gridX;
+        const y2 = gridY;
 
-        if (this.isGridOccupied(gridX, gridY)) return;
+        if (x1 === x2 && y1 === y2) return;
+        if (this.isGridOccupied(x2, y2)) return;
 
-        Path.add(this, this.dragStartGrid.x, this.dragStartGrid.y, gridX, gridY);
+        // Diagonal clipping check
+        if (Math.abs(x1 - x2) === 1 && Math.abs(y1 - y2) === 1) {
+            if (this.isGridOccupied(x1, y2) || this.isGridOccupied(x2, y1)) {
+                return;
+            }
+        }
+
+        Path.add(this, x1, y1, x2, y2);
     }
 
     private removePathAtGrid(gridX: number, gridY: number) {

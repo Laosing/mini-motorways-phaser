@@ -414,41 +414,10 @@ export class Worker extends GameObjects.Container {
         targetGridY: number,
         _targetContainer: GameObjects.Container,
     ): { x: number; y: number }[] {
-        const startGridX = Math.floor(this.x / Building.GRID_SIZE);
-        const startGridY = Math.floor(this.y / Building.GRID_SIZE);
-
-        if (startGridX === targetGridX && startGridY === targetGridY) return [];
-
         const game = this.scene as any;
-        const graph = Path.connectivityGraph;
         const buildings = game.buildings as Building[];
         const houses = game.houses as House[];
-
-        const queue: {
-            x: number;
-            y: number;
-            path: { x: number; y: number }[];
-        }[] = [{ x: startGridX, y: startGridY, path: [] }];
-        const visited = new Set<string>();
-        visited.add(`${startGridX},${startGridY}`);
-
-        // --- SNAPPING FAIL-SAFE ---
-        // If the current cell isn't in the graph, we might be stranded inside a structure 
-        // or just off-road. Try starting from any adjacent cell that IS in the graph.
-        if (!graph.has(`${startGridX},${startGridY}`)) {
-            const snapAdjacents = [
-                {x: startGridX+1, y: startGridY}, {x: startGridX-1, y: startGridY}, 
-                {x: startGridX, y: startGridY+1}, {x: startGridX, y: startGridY-1},
-                {x: startGridX+1, y: startGridY+1}, {x: startGridX-1, y: startGridY-1},
-                {x: startGridX+1, y: startGridY-1}, {x: startGridX-1, y: startGridY+1}
-            ];
-            for (const snap of snapAdjacents) {
-                if (graph.has(`${snap.x},${snap.y}`)) {
-                    queue.push({ x: snap.x, y: snap.y, path: [{ x: snap.x, y: snap.y }] });
-                    visited.add(`${snap.x},${snap.y}`);
-                }
-            }
-        }
+        const graph = Path.connectivityGraph;
 
         const getStructureAt = (gx: number, gy: number) => {
             for (const b of buildings) {
@@ -463,6 +432,38 @@ export class Worker extends GameObjects.Container {
             }
             return null;
         };
+
+        const startGridX = Math.floor(this.x / Building.GRID_SIZE);
+        const startGridY = Math.floor(this.y / Building.GRID_SIZE);
+
+        if (startGridX === targetGridX && startGridY === targetGridY) return [];
+
+        const queue: {
+            x: number;
+            y: number;
+            path: { x: number; y: number }[];
+        }[] = [{ x: startGridX, y: startGridY, path: [] }];
+        const visited = new Set<string>();
+        visited.add(`${startGridX},${startGridY}`);
+
+        // --- SNAPPING FAIL-SAFE ---
+        // If the current cell isn't in the graph, we might be stranded or off-road.
+        // IMPORTANT: We only snap if we are NOT inside a structure. 
+        // If we ARE in a structure, we must rely on the internal movement logic to reach the entrance.
+        if (!graph.has(`${startGridX},${startGridY}`) && !getStructureAt(startGridX, startGridY)) {
+            const snapAdjacents = [
+                {x: startGridX+1, y: startGridY}, {x: startGridX-1, y: startGridY}, 
+                {x: startGridX, y: startGridY+1}, {x: startGridX, y: startGridY-1},
+                {x: startGridX+1, y: startGridY+1}, {x: startGridX-1, y: startGridY-1},
+                {x: startGridX+1, y: startGridY-1}, {x: startGridX-1, y: startGridY+1}
+            ];
+            for (const snap of snapAdjacents) {
+                if (graph.has(`${snap.x},${snap.y}`)) {
+                    queue.push({ x: snap.x, y: snap.y, path: [{ x: snap.x, y: snap.y }] });
+                    visited.add(`${snap.x},${snap.y}`);
+                }
+            }
+        }
 
         while (queue.length > 0) {
             const { x, y, path } = queue.shift()!;
