@@ -30,6 +30,8 @@ export class Game extends Scene {
         0x10b981, // Green
         0xa855f7, // Purple
     ];
+    public workerGrid: Map<string, Worker[]> = new Map();
+    public structureGrid: Map<string, Building | House> = new Map();
 
     constructor() {
         super("Game");
@@ -224,22 +226,13 @@ export class Game extends Scene {
     }
 
     private isGridOccupied(gx: number, gy: number, includePaths: boolean = false): boolean {
-        const inBuilding = this.buildings.some(b => {
-            const bw = Math.floor(b.width / 32);
-            const bh = Math.floor(b.height / 32);
-            return gx >= b.gridX && gx < b.gridX + bw && gy >= b.gridY && gy < b.gridY + bh;
-        });
-        const inHouse = this.houses.some(h => {
-            const hw = Math.floor(h.width / 32);
-            const hh = Math.floor(h.height / 32);
-            return gx >= h.gridX && gx < h.gridX + hw && gy >= h.gridY && gy < h.gridY + hh;
-        });
+        const hasStructure = this.structureGrid.has(`${gx},${gy}`);
         
         if (includePaths && Path.isAt(gx, gy)) {
             return true;
         }
 
-        return inBuilding || inHouse;
+        return hasStructure;
     }
 
     private isPastHalfwayInto(pointer: { x: number, y: number }, from: { x: number, y: number }, to: { x: number, y: number }): boolean {
@@ -319,6 +312,16 @@ export class Game extends Scene {
 
         // Cleanup despawned workers
         this.workers = this.workers.filter(w => !w.isDespawned);
+
+        // Update spatial grid for collisions
+        this.workerGrid.clear();
+        for (const w of this.workers) {
+            const gx = Math.floor(w.x / Building.GRID_SIZE);
+            const gy = Math.floor(w.y / Building.GRID_SIZE);
+            const key = `${gx},${gy}`;
+            if (!this.workerGrid.has(key)) this.workerGrid.set(key, []);
+            this.workerGrid.get(key)!.push(w);
+        }
 
         // Update workers
         this.workers.forEach((w) => w.update(time, delta));
@@ -519,13 +522,22 @@ export class Game extends Scene {
             }
 
             // ALL CLEAR - SPAWN!
+            let structure: Building | House;
             if (isHouse) {
-                const house = new House(this, gx, gy, 1, 1, color, entranceDir as any);
-                this.houses.push(house);
+                structure = new House(this, gx, gy, 1, 1, color, entranceDir as any);
+                this.houses.push(structure as House);
             } else {
-                const building = new Building(this, gx, gy, 2, 3, color, entranceDir as any);
-                this.buildings.push(building);
+                structure = new Building(this, gx, gy, 2, 3, color, entranceDir as any);
+                this.buildings.push(structure as Building);
             }
+
+            // Fill structure grid for fast lookup
+            for (let ox = 0; ox < w; ox++) {
+                for (let oy = 0; oy < h; oy++) {
+                    this.structureGrid.set(`${gx + ox},${gy + oy}`, structure);
+                }
+            }
+
             console.log(`Spawned ${isHouse ? "House" : "Building"} at ${gx}, ${gy} facing ${entranceDir}`);
             return true;
         }

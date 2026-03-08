@@ -12,8 +12,8 @@ export enum WorkerState {
 }
 
 export class Worker extends GameObjects.Container {
-    private circle: GameObjects.Arc;
-    private cargo: GameObjects.Arc;
+    private circle: GameObjects.Image;
+    private cargo: GameObjects.Image;
     private workerState: WorkerState = WorkerState.IDLE;
     private targetBuilding: Building | null = null;
     private homeHouse: House;
@@ -29,7 +29,9 @@ export class Worker extends GameObjects.Container {
     private appliedMultiplier: number = 0; 
     private uniqueId: number = Math.random(); // Unique ID for priority yielding
 
-    private headlights: GameObjects.Graphics;
+    private headlights: GameObjects.Image;
+
+    private static texturesGenerated: boolean = false;
 
     constructor(scene: Scene, house: House) {
         // Spawn at house center
@@ -39,23 +41,63 @@ export class Worker extends GameObjects.Container {
 
         this.homeHouse = house;
 
+        // Ensure textures are generated once
+        Worker.generateTextures(scene);
+
         // Headlights (Vision Cone)
-        this.headlights = scene.add.graphics();
+        this.headlights = scene.add.image(0, 0, "worker-headlights");
+        this.headlights.setOrigin(0, 0.5); // Pivot at worker center
         this.add(this.headlights);
-        this.drawHeadlights();
 
         // Create the white circle visual
-        this.circle = scene.add.circle(0, 0, 4, 0xffffff);
-        this.circle.setStrokeStyle(1, 0x000000);
+        this.circle = scene.add.image(0, 0, "worker-body");
         this.add(this.circle);
 
         // Cargo visual (Matches house color)
-        this.cargo = scene.add.circle(0, 0, 2, house.bodyColor);
+        this.cargo = scene.add.image(0, 0, "worker-cargo");
+        this.cargo.setTint(house.bodyColor);
         this.cargo.setVisible(false);
         this.add(this.cargo);
 
         scene.add.existing(this as GameObjects.GameObject);
         this.setDepth(10);
+    }
+
+    private static generateTextures(scene: Scene) {
+        if (this.texturesGenerated) return;
+
+        // Generate Worker Body
+        const bodyG = scene.make.graphics({ x: 0, y: 0 }, false);
+        bodyG.fillStyle(0xffffff, 1);
+        bodyG.fillCircle(8, 8, 4);
+        bodyG.lineStyle(1, 0x000000, 1);
+        bodyG.strokeCircle(8, 8, 4);
+        bodyG.generateTexture("worker-body", 16, 16);
+        bodyG.destroy();
+
+        // Generate Cargo (White, will be tinted)
+        const cargoG = scene.make.graphics({ x: 0, y: 0 }, false);
+        cargoG.fillStyle(0xffffff, 1);
+        cargoG.fillCircle(4, 4, 2);
+        cargoG.generateTexture("worker-cargo", 8, 8);
+        cargoG.destroy();
+
+        // Generate Headlights (soft white arc)
+        const headG = scene.make.graphics({ x: 0, y: 0 }, false);
+        const slowDistance = 50;
+        const coneAngle = Phaser.Math.DegToRad(35);
+        headG.fillStyle(0xffffff, 0.15);
+        headG.beginPath();
+        headG.moveTo(0, slowDistance); // Account for texture padding/centering
+        headG.arc(0, slowDistance, slowDistance, -coneAngle/2, coneAngle/2);
+        headG.closePath();
+        headG.fillPath();
+        
+        // Headlights need a bit more space
+        headG.generateTexture("worker-headlights", slowDistance, slowDistance * 2);
+        headG.destroy();
+
+        this.texturesGenerated = true;
     }
 
     public setTargetBuilding(building: Building, gx: number, gy: number) {
@@ -244,27 +286,13 @@ export class Worker extends GameObjects.Container {
             
             const dist = Phaser.Math.Distance.Between(this.x, this.y, targetX, targetY);
             if (dist > 2) {
-                this.moveToPoint(targetX, targetY, deltaSeconds);
+        this.moveToPoint(targetX, targetY, deltaSeconds);
             }
         }
     }
 
     private waitTimer: number = 0;
-
-    private drawHeadlights() {
-        const h = this.headlights;
-        h.clear();
-        const slowDistance = 50;
-        const coneAngle = Phaser.Math.DegToRad(35); // Narrower beam for precision
-
-        h.fillStyle(0xffffff, 0.15); // soft white light
-        h.beginPath();
-        h.moveTo(0, 0);
-        h.arc(0, 0, slowDistance, -coneAngle/2, coneAngle/2);
-        h.closePath();
-        h.fillPath();
-    }
-
+ 
     public getHeading(): number {
         return this.headlights.rotation;
     }
@@ -276,7 +304,7 @@ export class Worker extends GameObjects.Container {
         baseMultiplier: number = 1.0
     ) {
         const game = this.scene as any;
-        const allWorkers = game.workers as Worker[];
+        const grid = game.workerGrid as Map<string, Worker[]>;
         
         const safeDistance = 24; 
         const slowDistance = 50; 
@@ -294,56 +322,70 @@ export class Worker extends GameObjects.Container {
 
         // If ghosting, we just move. No collision check.
         if (!isGhosting) {
-            for (const other of allWorkers) {
-                if (other === this || other.isDespawned) continue;
+            const gx = Math.floor(this.x / Building.GRID_SIZE);
+            const gy = Math.floor(this.y / Building.GRID_SIZE);
 
-                const dist = Phaser.Math.Distance.Between(this.x, this.y, other.x, other.y);
-                if (dist < slowDistance) {
-                    const angleToOther = Phaser.Math.Angle.Between(this.x, this.y, other.x, other.y);
-                    const diff = Phaser.Math.Angle.ShortestBetween(Phaser.Math.RadToDeg(angleToTarget), Phaser.Math.RadToDeg(angleToOther));
-                    
-                    // NARROW CONE (25 deg): Only stop for what's directly in our path
-                    if (Math.abs(diff) < 25) {
-                        const otherHeading = other.getHeading();
-                        const headingDiff = Phaser.Math.Angle.ShortestBetween(Phaser.Math.RadToDeg(angleToTarget), Phaser.Math.RadToDeg(otherHeading));
-                        
-                        if (Math.abs(headingDiff) > 135) continue;
+            // Check neighbors in a 3x3 grid (current cell + 8 surrounding)
+            for (let dx = -1; dx <= 1; dx++) {
+                for (let dy = -1; dy <= 1; dy++) {
+                    const cellKey = `${gx + dx},${gy + dy}`;
+                    const neighbors = grid.get(cellKey);
+                    if (!neighbors) continue;
 
-                        // DEADLOCK RESOLUTION
-                        const otherAngleToUs = Phaser.Math.Angle.Between(other.x, other.y, this.x, this.y);
-                        const otherDiff = Phaser.Math.Angle.ShortestBetween(Phaser.Math.RadToDeg(otherHeading), Phaser.Math.RadToDeg(otherAngleToUs));
-                        const theyAreLookingAtUs = Math.abs(otherDiff) < 25;
+                    for (const other of neighbors) {
+                        if (other === this || other.isDespawned) continue;
 
-                        if (theyAreLookingAtUs) {
-                            if (this.uniqueId > (other as any).uniqueId) {
-                                if (!isFrustrated) {
-                                    isStopped = true;
-                                    targetMultiplier = 0;
-                                    break;
-                                } else {
-                                    targetMultiplier = Math.min(targetMultiplier, 0.3);
-                                    continue;
+                        const dist = Phaser.Math.Distance.Between(this.x, this.y, other.x, other.y);
+                        if (dist < slowDistance) {
+                            const angleToOther = Phaser.Math.Angle.Between(this.x, this.y, other.x, other.y);
+                            const diff = Phaser.Math.Angle.ShortestBetween(Phaser.Math.RadToDeg(angleToTarget), Phaser.Math.RadToDeg(angleToOther));
+                            
+                            // NARROW CONE (25 deg): Only stop for what's directly in our path
+                            if (Math.abs(diff) < 25) {
+                                const otherHeading = other.getHeading();
+                                const headingDiff = Phaser.Math.Angle.ShortestBetween(Phaser.Math.RadToDeg(angleToTarget), Phaser.Math.RadToDeg(otherHeading));
+                                
+                                if (Math.abs(headingDiff) > 135) continue;
+
+                                // DEADLOCK RESOLUTION
+                                const otherAngleToUs = Phaser.Math.Angle.Between(other.x, other.y, this.x, this.y);
+                                const otherDiff = Phaser.Math.Angle.ShortestBetween(Phaser.Math.RadToDeg(otherHeading), Phaser.Math.RadToDeg(otherAngleToUs));
+                                const theyAreLookingAtUs = Math.abs(otherDiff) < 25;
+
+                                if (theyAreLookingAtUs) {
+                                    if (this.uniqueId > (other as any).uniqueId) {
+                                        if (!isFrustrated) {
+                                            isStopped = true;
+                                            targetMultiplier = 0;
+                                            break;
+                                        } else {
+                                            targetMultiplier = Math.min(targetMultiplier, 0.3);
+                                            continue;
+                                        }
+                                    } else {
+                                        targetMultiplier = Math.min(targetMultiplier, 1.2); 
+                                        continue;
+                                    }
                                 }
-                            } else {
-                                targetMultiplier = Math.min(targetMultiplier, 1.2); 
-                                continue;
-                            }
-                        }
 
-                        if (dist < safeDistance) {
-                            if (!isFrustrated) {
-                                isStopped = true;
-                                targetMultiplier = 0;
-                                break;
-                            } else {
-                                targetMultiplier = Math.min(targetMultiplier, 0.3);
+                                if (dist < safeDistance) {
+                                    if (!isFrustrated) {
+                                        isStopped = true;
+                                        targetMultiplier = 0;
+                                        break;
+                                    } else {
+                                        targetMultiplier = Math.min(targetMultiplier, 0.3);
+                                    }
+                                } else {
+                                    const brakeFactor = (dist - safeDistance) / (slowDistance - safeDistance);
+                                    targetMultiplier = Math.min(targetMultiplier, Math.max(0, brakeFactor));
+                                }
                             }
-                        } else {
-                            const brakeFactor = (dist - safeDistance) / (slowDistance - safeDistance);
-                            targetMultiplier = Math.min(targetMultiplier, Math.max(0, brakeFactor));
                         }
                     }
+                    if (isStopped) break;
                 }
+                if (isStopped) break;
             }
         }
 
@@ -415,22 +457,10 @@ export class Worker extends GameObjects.Container {
         _targetContainer: GameObjects.Container,
     ): { x: number; y: number }[] {
         const game = this.scene as any;
-        const buildings = game.buildings as Building[];
-        const houses = game.houses as House[];
         const graph = Path.connectivityGraph;
 
         const getStructureAt = (gx: number, gy: number) => {
-            for (const b of buildings) {
-                const bw = Math.floor(b.width / 32);
-                const bh = Math.floor(b.height / 32);
-                if (gx >= b.gridX && gx < b.gridX + bw && gy >= b.gridY && gy < b.gridY + bh) return b;
-            }
-            for (const h of houses) {
-                const hw = Math.floor(h.width / 32);
-                const hh = Math.floor(h.height / 32);
-                if (gx >= h.gridX && gx < h.gridX + hw && gy >= h.gridY && gy < h.gridY + hh) return h;
-            }
-            return null;
+            return game.structureGrid.get(`${gx},${gy}`);
         };
 
         const startGridX = Math.floor(this.x / Building.GRID_SIZE);
