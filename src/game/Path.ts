@@ -20,6 +20,11 @@ export class Path {
         );
     }
 
+    public static isIntersection(gx: number, gy: number): boolean {
+        const neighbors = this.connectivityGraph.get(`${gx},${gy}`);
+        return (neighbors?.size || 0) >= 3;
+    }
+
     constructor(
         x1: number,
         y1: number,

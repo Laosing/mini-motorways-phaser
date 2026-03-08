@@ -17,7 +17,7 @@ export class Worker extends GameObjects.Container {
     private workerState: WorkerState = WorkerState.IDLE;
     private targetBuilding: Building | null = null;
     private homeHouse: House;
-    private speed: number = 120; // pixels per second
+    private speed: number = 140; // Increased base speed for better flow
     private currentPath: { x: number; y: number }[] = [];
     private lastPathTargetKey: string = "";
 
@@ -26,6 +26,10 @@ export class Worker extends GameObjects.Container {
     private activeTargetGridY: number = 0;
     private pauseTimer: number = 0;
     public isDespawned: boolean = false;
+    private appliedMultiplier: number = 0; 
+    private uniqueId: number = Math.random(); // Unique ID for priority yielding
+
+    private headlights: GameObjects.Graphics;
 
     constructor(scene: Scene, house: House) {
         // Spawn at house center
@@ -34,6 +38,11 @@ export class Worker extends GameObjects.Container {
         super(scene, centerX, centerY);
 
         this.homeHouse = house;
+
+        // Headlights (Vision Cone)
+        this.headlights = scene.add.graphics();
+        this.add(this.headlights);
+        this.drawHeadlights();
 
         // Create the white circle visual
         this.circle = scene.add.circle(0, 0, 4, 0xffffff);
@@ -123,16 +132,6 @@ export class Worker extends GameObjects.Container {
                         this.activeTargetGridY,
                     )
                 ) {
-                    console.log("Worker returned home. Dropping off for 1s...");
-                    this.workerState = WorkerState.DROPPING_OFF;
-                    this.pauseTimer = 1.0;
-                }
-                break;
-
-            case WorkerState.DROPPING_OFF:
-                this.pauseTimer -= deltaSeconds;
-                if (this.pauseTimer <= 0) {
-                    console.log("Drop off done. Despawning.");
                     this.despawn();
                 }
                 break;
@@ -155,6 +154,9 @@ export class Worker extends GameObjects.Container {
         return null;
     }
 
+    private prevGridX: number = -1;
+    private prevGridY: number = -1;
+
     private followPath(
         tX: number,
         tY: number,
@@ -162,22 +164,28 @@ export class Worker extends GameObjects.Container {
         deltaSeconds: number,
     ) {
         const targetKey = `${tX},${tY}`;
+        const laneOffset = 6; // pixels to stay on the right
+
+        const gx = Math.floor(this.x / Building.GRID_SIZE);
+        const gy = Math.floor(this.y / Building.GRID_SIZE);
+
+        if (this.prevGridX === -1) {
+            this.prevGridX = gx;
+            this.prevGridY = gy;
+        }
 
         // Recalculate path if target changed or we don't have one
         if (
             this.lastPathTargetKey !== targetKey ||
             this.currentPath.length === 0
         ) {
-            const gx = Math.floor(this.x / Building.GRID_SIZE);
-            const gy = Math.floor(this.y / Building.GRID_SIZE);
-
             if (gx !== tX || gy !== tY) {
                 this.currentPath = this.findBFSPath(tX, tY, targetContainer);
                 this.lastPathTargetKey = targetKey;
 
                 if (this.currentPath.length === 0) {
-                    console.warn(`Worker stuck! No path to ${targetKey}.`);
-                    this.workerState = WorkerState.IDLE;
+                    // Stranded! Stop moving and wait for a reconstruction
+                    this.appliedMultiplier = 0;
                     return;
                 }
             }
@@ -188,58 +196,190 @@ export class Worker extends GameObjects.Container {
             const nextX = (nextNode.x + 0.5) * Building.GRID_SIZE;
             const nextY = (nextNode.y + 0.5) * Building.GRID_SIZE;
 
+            // CRITICAL: Calculate angle based on grid segment, NOT pixel position.
+            // This prevents the feedback loop that causes spinning.
+            const segmentAngle = Phaser.Math.Angle.Between(this.prevGridX, this.prevGridY, nextNode.x, nextNode.y);
+            
+            // --- TURN SLOWDOWN LOGIC ---
+            let turnMultiplier = 1.0;
+            if (this.currentPath.length >= 2) {
+                const nextNode2 = this.currentPath[1];
+                const nextAngle = Phaser.Math.Angle.Between(nextNode.x, nextNode.y, nextNode2.x, nextNode2.y);
+                const turnAngleDiff = Math.abs(Phaser.Math.Angle.ShortestBetween(Phaser.Math.RadToDeg(segmentAngle), Phaser.Math.RadToDeg(nextAngle)));
+                
+                if (turnAngleDiff > 45) {
+                    const distToNode = Phaser.Math.Distance.Between(this.x, this.y, nextX, nextY);
+                    if (distToNode < 32) {
+                        // Blend down to 0.4 speed as we hit the corner
+                        turnMultiplier = Phaser.Math.Linear(0.4, 1.0, Math.min(1, distToNode / 32));
+                    }
+                }
+            }
+
+            const rightSideAngle = segmentAngle + Math.PI / 2;
+            const offsetX = Math.cos(rightSideAngle) * laneOffset;
+            const offsetY = Math.sin(rightSideAngle) * laneOffset;
+
+            const offsetNextX = nextX + offsetX;
+            const offsetNextY = nextY + offsetY;
+
             const dist = Phaser.Math.Distance.Between(
                 this.x,
                 this.y,
-                nextX,
-                nextY,
+                offsetNextX,
+                offsetNextY,
             );
+            
             if (dist < 4) {
+                this.prevGridX = nextNode.x;
+                this.prevGridY = nextNode.y;
                 this.currentPath.shift();
             } else {
-                this.moveToPoint(nextX, nextY, deltaSeconds);
+                this.moveToPoint(offsetNextX, offsetNextY, deltaSeconds, turnMultiplier);
             }
         } else {
-            // Move to the exact center of the target cell
+            // Final approach: Move to exact center (No offset to avoid jitter)
             const targetX = (tX + 0.5) * Building.GRID_SIZE;
             const targetY = (tY + 0.5) * Building.GRID_SIZE;
-            const dist = Phaser.Math.Distance.Between(
-                this.x,
-                this.y,
-                targetX,
-                targetY,
-            );
+            
+            const dist = Phaser.Math.Distance.Between(this.x, this.y, targetX, targetY);
             if (dist > 2) {
                 this.moveToPoint(targetX, targetY, deltaSeconds);
             }
         }
     }
 
+    private waitTimer: number = 0;
+
+    private drawHeadlights() {
+        const h = this.headlights;
+        h.clear();
+        const slowDistance = 50;
+        const coneAngle = Phaser.Math.DegToRad(35); // Narrower beam for precision
+
+        h.fillStyle(0xffffff, 0.15); // soft white light
+        h.beginPath();
+        h.moveTo(0, 0);
+        h.arc(0, 0, slowDistance, -coneAngle/2, coneAngle/2);
+        h.closePath();
+        h.fillPath();
+    }
+
+    public getHeading(): number {
+        return this.headlights.rotation;
+    }
+
     private moveToPoint(
         targetX: number,
         targetY: number,
         deltaSeconds: number,
+        baseMultiplier: number = 1.0
     ) {
-        const angle = Phaser.Math.Angle.Between(
-            this.x,
-            this.y,
-            targetX,
-            targetY,
-        );
-        const distance = Phaser.Math.Distance.Between(
-            this.x,
-            this.y,
-            targetX,
-            targetY,
-        );
-        const moveDistance = this.speed * deltaSeconds;
+        const game = this.scene as any;
+        const allWorkers = game.workers as Worker[];
+        
+        const safeDistance = 24; 
+        const slowDistance = 50; 
+        const angleToTarget = Phaser.Math.Angle.Between(this.x, this.y, targetX, targetY);
+
+        this.headlights.setRotation(angleToTarget);
+
+        let targetMultiplier = baseMultiplier;
+        let isStopped = false;
+        
+        // --- HARD GHOSTING (FAIL-SAFE) ---
+        // If stuck for too long (3s+), ignore collisions entirely to clear the jam.
+        const isGhosting = this.waitTimer > 3.0;
+        const isFrustrated = this.waitTimer > 1.2;
+
+        // If ghosting, we just move. No collision check.
+        if (!isGhosting) {
+            for (const other of allWorkers) {
+                if (other === this || other.isDespawned) continue;
+
+                const dist = Phaser.Math.Distance.Between(this.x, this.y, other.x, other.y);
+                if (dist < slowDistance) {
+                    const angleToOther = Phaser.Math.Angle.Between(this.x, this.y, other.x, other.y);
+                    const diff = Phaser.Math.Angle.ShortestBetween(Phaser.Math.RadToDeg(angleToTarget), Phaser.Math.RadToDeg(angleToOther));
+                    
+                    // NARROW CONE (25 deg): Only stop for what's directly in our path
+                    if (Math.abs(diff) < 25) {
+                        const otherHeading = other.getHeading();
+                        const headingDiff = Phaser.Math.Angle.ShortestBetween(Phaser.Math.RadToDeg(angleToTarget), Phaser.Math.RadToDeg(otherHeading));
+                        
+                        if (Math.abs(headingDiff) > 135) continue;
+
+                        // DEADLOCK RESOLUTION
+                        const otherAngleToUs = Phaser.Math.Angle.Between(other.x, other.y, this.x, this.y);
+                        const otherDiff = Phaser.Math.Angle.ShortestBetween(Phaser.Math.RadToDeg(otherHeading), Phaser.Math.RadToDeg(otherAngleToUs));
+                        const theyAreLookingAtUs = Math.abs(otherDiff) < 25;
+
+                        if (theyAreLookingAtUs) {
+                            if (this.uniqueId > (other as any).uniqueId) {
+                                if (!isFrustrated) {
+                                    isStopped = true;
+                                    targetMultiplier = 0;
+                                    break;
+                                } else {
+                                    targetMultiplier = Math.min(targetMultiplier, 0.3);
+                                    continue;
+                                }
+                            } else {
+                                targetMultiplier = Math.min(targetMultiplier, 1.2); 
+                                continue;
+                            }
+                        }
+
+                        if (dist < safeDistance) {
+                            if (!isFrustrated) {
+                                isStopped = true;
+                                targetMultiplier = 0;
+                                break;
+                            } else {
+                                targetMultiplier = Math.min(targetMultiplier, 0.3);
+                            }
+                        } else {
+                            const brakeFactor = (dist - safeDistance) / (slowDistance - safeDistance);
+                            targetMultiplier = Math.min(targetMultiplier, Math.max(0, brakeFactor));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Apply smooth acceleration and braking
+        if (isStopped) {
+            this.appliedMultiplier = 0; 
+            this.waitTimer += deltaSeconds;
+            return;
+        }
+
+        // Decay the wait timer faster if we are successfully moving
+        this.waitTimer = Math.max(0, this.waitTimer - deltaSeconds * 4);
+
+        // ACCELERATION/BRAKE PHYSIC:
+        // Acceleration speed (rising multiplier) should be slower. 
+        // Braking speed (falling multiplier) should be fast.
+        if (this.appliedMultiplier < targetMultiplier) {
+            // Speeding up - slow acceleration (0.8/sec)
+            this.appliedMultiplier = Math.min(targetMultiplier, this.appliedMultiplier + deltaSeconds * 0.8);
+        } else if (this.appliedMultiplier > targetMultiplier) {
+            // Slowing down - fast braking (2.5/sec)
+            this.appliedMultiplier = Math.max(targetMultiplier, this.appliedMultiplier - deltaSeconds * 2.5);
+        }
+
+        this.waitTimer = Math.max(0, this.waitTimer - deltaSeconds * 2);
+
+        const distance = Phaser.Math.Distance.Between(this.x, this.y, targetX, targetY);
+        const currentSpeed = this.speed * this.appliedMultiplier;
+        const moveDistance = currentSpeed * deltaSeconds;
 
         if (distance < moveDistance) {
             this.x = targetX;
             this.y = targetY;
         } else {
-            this.x += Math.cos(angle) * moveDistance;
-            this.y += Math.sin(angle) * moveDistance;
+            this.x += Math.cos(angleToTarget) * moveDistance;
+            this.y += Math.sin(angleToTarget) * moveDistance;
         }
     }
 
@@ -291,6 +431,24 @@ export class Worker extends GameObjects.Container {
         }[] = [{ x: startGridX, y: startGridY, path: [] }];
         const visited = new Set<string>();
         visited.add(`${startGridX},${startGridY}`);
+
+        // --- SNAPPING FAIL-SAFE ---
+        // If the current cell isn't in the graph, we might be stranded inside a structure 
+        // or just off-road. Try starting from any adjacent cell that IS in the graph.
+        if (!graph.has(`${startGridX},${startGridY}`)) {
+            const snapAdjacents = [
+                {x: startGridX+1, y: startGridY}, {x: startGridX-1, y: startGridY}, 
+                {x: startGridX, y: startGridY+1}, {x: startGridX, y: startGridY-1},
+                {x: startGridX+1, y: startGridY+1}, {x: startGridX-1, y: startGridY-1},
+                {x: startGridX+1, y: startGridY-1}, {x: startGridX-1, y: startGridY+1}
+            ];
+            for (const snap of snapAdjacents) {
+                if (graph.has(`${snap.x},${snap.y}`)) {
+                    queue.push({ x: snap.x, y: snap.y, path: [{ x: snap.x, y: snap.y }] });
+                    visited.add(`${snap.x},${snap.y}`);
+                }
+            }
+        }
 
         const getStructureAt = (gx: number, gy: number) => {
             for (const b of buildings) {

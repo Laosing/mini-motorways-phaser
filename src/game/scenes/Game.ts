@@ -149,7 +149,10 @@ export class Game extends Scene {
                         else if (dx < 0 && dy < 0) dir = "up-left";
                         
                         if (dir) {
-                            startHouse.setDirection(dir);
+                            // Only rotate if the target grid cell is clear of other houses/buildings
+                            if (!this.isGridOccupied(gx, gy, false)) {
+                                startHouse.setDirection(dir);
+                            }
                         }
                     }
 
@@ -366,27 +369,64 @@ export class Game extends Scene {
     private spawnRandomStructure() {
         const gridW = 32;
         const gridH = 24;
-        const directions: ("up" | "down" | "left" | "right")[] = ["up", "down", "left", "right"];
 
-        // Sequence: House, House, Building
-        // This gives us a 2:1 ratio so we have enough workers for the big buildings
         const isHouse = (this.structureSpawnCounter % 3) < 2;
         const w = isHouse ? 1 : 2;
         const h = isHouse ? 1 : 3;
 
-        // Pick color based on the number of building sets spawned so far
         const colorIndex = Math.floor(this.structureSpawnCounter / 3) % this.colorPalette.length;
         const structureColor = this.colorPalette[colorIndex];
 
-        // Try a few times to find a spot
-        for (let i = 0; i < 30; i++) {
-            const entranceDir = directions[Math.floor(Math.random() * directions.length)];
+        // 1. House Clustering Logic (Radius 2):
+        if (isHouse) {
+            const sameColorHouses = this.houses.filter(h => h.bodyColor === structureColor);
+            if (sameColorHouses.length > 0) {
+                Phaser.Utils.Array.Shuffle(sameColorHouses);
+                for (const neighbor of sameColorHouses) {
+                    const searchZone: { gx: number, gy: number }[] = [];
+                    // Radius 2 search (including diagonals)
+                    for (let dx = -2; dx <= 2; dx++) {
+                        for (let dy = -2; dy <= 2; dy++) {
+                            if (dx === 0 && dy === 0) continue;
+                            searchZone.push({ gx: neighbor.gridX + dx, gy: neighbor.gridY + dy });
+                        }
+                    }
+                    Phaser.Utils.Array.Shuffle(searchZone);
 
-            // Random position within bounds
+                    for (const adj of searchZone) {
+                        if (this.tryToSpawnAt(adj.gx, adj.gy, w, h, isHouse, structureColor)) {
+                            this.structureSpawnCounter++;
+                            return; // SUCCESS!
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Fallback: Systematic Random search
+        // Check 100 random spots to be really thorough
+        for (let i = 0; i < 100; i++) {
             const gx = Math.floor(Math.random() * (gridW - w));
             const gy = Math.floor(Math.random() * (gridH - h));
+            
+            if (this.tryToSpawnAt(gx, gy, w, h, isHouse, structureColor)) {
+                this.structureSpawnCounter++;
+                return; // SUCCESS!
+            }
+        }
+    }
 
-            // Check driveway bounds
+    private tryToSpawnAt(gx: number, gy: number, w: number, h: number, isHouse: boolean, color: number): boolean {
+        const gridW = 32;
+        const gridH = 24;
+        const orientations: ("up" | "down" | "left" | "right")[] = ["up", "down", "left", "right"];
+
+        // Bounds check
+        if (gx < 0 || gx + w > gridW || gy < 0 || gy + h > gridH) return false;
+
+        // Try orientations
+        Phaser.Utils.Array.Shuffle(orientations);
+        for (const entranceDir of orientations) {
             let drivewayX = gx;
             let drivewayY = gy;
             if (entranceDir === "down") { drivewayY = gy + h; }
@@ -396,34 +436,51 @@ export class Game extends Scene {
 
             if (drivewayX < 0 || drivewayX >= gridW || drivewayY < 0 || drivewayY >= gridH) continue;
 
-            // Check if footprint + driveway + buffer is clear
-            let conflict = false;
-            // Footprint check
-            for (let ox = -1; ox <= w; ox++) {
-                for (let oy = -1; oy <= h; oy++) {
+            // 1. FOOTPRINT CHECK: Must be 100% empty (no buffer here to allow adjacency)
+            let footprintConflict = false;
+            for (let ox = 0; ox < w; ox++) {
+                for (let oy = 0; oy < h; oy++) {
                     if (this.isGridOccupied(gx + ox, gy + oy, true)) {
-                        conflict = true; break;
+                        footprintConflict = true; break;
                     }
                 }
-                if (conflict) break;
+                if (footprintConflict) break;
             }
-            if (conflict) continue;
+            if (footprintConflict) continue;
 
-            // Driveway check
+            // 2. DRIVEWAY CHECK: Must be empty (no building and no path blocking entrance)
             if (this.isGridOccupied(drivewayX, drivewayY, true)) continue;
 
-            // No conflict! Spawn it
+            // 3. (Optional) SEPARATION BUFFER:
+            // We want buildings (2x3) to stay 1 cell away from everything else
+            // but let houses (1x1) be neighbors.
+            if (!isHouse) {
+                let bufferConflict = false;
+                for (let ox = -1; ox <= w; ox++) {
+                    for (let oy = -1; oy <= h; oy++) {
+                        if (ox >= 0 && ox < w && oy >= 0 && oy < h) continue; // Skip footprint
+                        if (this.isGridOccupied(gx + ox, gy + oy, false)) { // Only care about buildings/houses
+                            bufferConflict = true; break;
+                        }
+                    }
+                    if (bufferConflict) break;
+                }
+                if (bufferConflict) continue;
+            }
+
+            // ALL CLEAR
             if (isHouse) {
-                const house = new House(this, gx, gy, 1, 1, structureColor, entranceDir as any);
+                const house = new House(this, gx, gy, 1, 1, color, entranceDir as any);
                 this.houses.push(house);
             } else {
-                const building = new Building(this, gx, gy, 2, 3, structureColor, entranceDir as any);
+                const building = new Building(this, gx, gy, 2, 3, color, entranceDir as any);
                 this.buildings.push(building);
             }
             console.log(`Spawned ${isHouse ? "House" : "Building"} at ${gx}, ${gy} facing ${entranceDir}`);
-            this.structureSpawnCounter++;
-            return;
+            return true;
         }
+
+        return false;
     }
 
     public toggleSpawning() {
