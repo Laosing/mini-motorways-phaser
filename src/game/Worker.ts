@@ -48,16 +48,19 @@ export class Worker extends GameObjects.Container {
         this.headlights = scene.add.image(0, 0, "worker-headlights");
         this.headlights.setOrigin(0, 0.5); // Pivot at worker center
         this.add(this.headlights);
+        this.headlights.setScale(0.25); // 1/4 resolution
 
         // Create the white circle visual
         this.circle = scene.add.image(0, 0, "worker-body");
         this.add(this.circle);
+        this.circle.setScale(0.25); // 1/4 resolution
 
         // Cargo visual (Matches house color)
         this.cargo = scene.add.image(0, 0, "worker-cargo");
         this.cargo.setTint(house.bodyColor);
         this.cargo.setVisible(false);
         this.add(this.cargo);
+        this.cargo.setScale(0.25); // 1/4 resolution
 
         scene.add.existing(this as GameObjects.GameObject);
         this.setDepth(10);
@@ -66,34 +69,35 @@ export class Worker extends GameObjects.Container {
     private static generateTextures(scene: Scene) {
         if (this.texturesGenerated) return;
 
+        const resolution = 4; // 4x Supersampling for crispness at zoom
+
         // Generate Worker Body
         const bodyG = scene.make.graphics({ x: 0, y: 0 }, false);
         bodyG.fillStyle(0xffffff, 1);
-        bodyG.fillCircle(8, 8, 4);
-        bodyG.lineStyle(1, 0x000000, 1);
-        bodyG.strokeCircle(8, 8, 4);
-        bodyG.generateTexture("worker-body", 16, 16);
+        bodyG.fillCircle(8 * resolution, 8 * resolution, 4 * resolution);
+        bodyG.lineStyle(resolution, 0x000000, 1); // Scale stroke
+        bodyG.strokeCircle(8 * resolution, 8 * resolution, 4 * resolution);
+        bodyG.generateTexture("worker-body", 16 * resolution, 16 * resolution);
         bodyG.destroy();
 
         // Generate Cargo (White, will be tinted)
         const cargoG = scene.make.graphics({ x: 0, y: 0 }, false);
         cargoG.fillStyle(0xffffff, 1);
-        cargoG.fillCircle(4, 4, 2);
-        cargoG.generateTexture("worker-cargo", 8, 8);
+        cargoG.fillCircle(4 * resolution, 4 * resolution, 2 * resolution);
+        cargoG.generateTexture("worker-cargo", 8 * resolution, 8 * resolution);
         cargoG.destroy();
 
         // Generate Headlights (soft white arc)
         const headG = scene.make.graphics({ x: 0, y: 0 }, false);
-        const slowDistance = 50;
+        const slowDistance = 50 * resolution;
         const coneAngle = Phaser.Math.DegToRad(35);
         headG.fillStyle(0xffffff, 0.15);
         headG.beginPath();
-        headG.moveTo(0, slowDistance); // Account for texture padding/centering
+        headG.moveTo(0, slowDistance); 
         headG.arc(0, slowDistance, slowDistance, -coneAngle/2, coneAngle/2);
         headG.closePath();
         headG.fillPath();
         
-        // Headlights need a bit more space
         headG.generateTexture("worker-headlights", slowDistance, slowDistance * 2);
         headG.destroy();
 
