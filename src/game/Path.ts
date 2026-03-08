@@ -8,10 +8,12 @@ export interface PathPoint {
 export class Path {
     public static paths: Path[] = [];
     public static connectivityGraph: Map<string, Set<string>> = new Map();
+    public static networkVersion: number = 0; 
     private static graphics: GameObjects.Graphics | null = null;
 
     public points: PathPoint[];
     public isFixture: boolean = false;
+    public isOneWay: boolean = false;
 
     public static isAt(gridX: number, gridY: number): boolean {
         return this.paths.some(p => {
@@ -48,12 +50,14 @@ export class Path {
         x2: number,
         y2: number,
         isFixture: boolean = false,
+        isOneWay: boolean = false,
     ) {
         this.points = [
             { x: x1, y: y1 },
             { x: x2, y: y2 },
         ];
         this.isFixture = isFixture;
+        this.isOneWay = isOneWay;
     }
 
     public static init(scene: Scene) {
@@ -72,9 +76,10 @@ export class Path {
         x2: number,
         y2: number,
         isFixture: boolean = false,
+        isOneWay: boolean = false,
     ) {
         console.log(
-            `Path.add: (${x1},${y1}) to (${x2},${y2}), isFixture: ${isFixture}`,
+            `Path.add: (${x1},${y1}) to (${x2},${y2}), isFixture: ${isFixture}, isOneWay: ${isOneWay}`,
         );
         // Check if this segment already exists
         const exists = this.paths.some(
@@ -90,9 +95,10 @@ export class Path {
         );
 
         if (!exists) {
-            const path = new Path(x1, y1, x2, y2, isFixture);
+            const path = new Path(x1, y1, x2, y2, isFixture, isOneWay);
             this.paths.push(path);
-            this.updateConnectivity(x1, y1, x2, y2, true);
+            this.updateConnectivity(x1, y1, x2, y2, true, isOneWay);
+            this.networkVersion++;
             this.render();
         }
     }
@@ -131,10 +137,12 @@ export class Path {
                 p.points[1].x,
                 p.points[1].y,
                 false,
+                p.isOneWay
             );
             const index = this.paths.indexOf(p);
             if (index > -1) this.paths.splice(index, 1);
         });
+        this.networkVersion++;
         this.render();
     }
 
@@ -148,8 +156,9 @@ export class Path {
 
         if (index > -1) {
             const p = this.paths[index];
-            this.updateConnectivity(p.points[0].x, p.points[0].y, p.points[1].x, p.points[1].y, false);
+            this.updateConnectivity(p.points[0].x, p.points[0].y, p.points[1].x, p.points[1].y, false, p.isOneWay);
             this.paths.splice(index, 1);
+            this.networkVersion++;
             this.render();
         }
     }
@@ -160,6 +169,7 @@ export class Path {
         x2: number,
         y2: number,
         add: boolean,
+        isOneWay: boolean = false
     ) {
         const k1 = `${x1},${y1}`;
         const k2 = `${x2},${y2}`;
@@ -167,17 +177,23 @@ export class Path {
         if (add) {
             if (!this.connectivityGraph.has(k1))
                 this.connectivityGraph.set(k1, new Set());
-            if (!this.connectivityGraph.has(k2))
-                this.connectivityGraph.set(k2, new Set());
             this.connectivityGraph.get(k1)!.add(k2);
-            this.connectivityGraph.get(k2)!.add(k1);
+            
+            if (!isOneWay) {
+                if (!this.connectivityGraph.has(k2))
+                    this.connectivityGraph.set(k2, new Set());
+                this.connectivityGraph.get(k2)!.add(k1);
+            }
         } else {
             const s1 = this.connectivityGraph.get(k1);
-            const s2 = this.connectivityGraph.get(k2);
             s1?.delete(k2);
-            s2?.delete(k1);
             if (s1 && s1.size === 0) this.connectivityGraph.delete(k1);
-            if (s2 && s2.size === 0) this.connectivityGraph.delete(k2);
+
+            if (!isOneWay) {
+                const s2 = this.connectivityGraph.get(k2);
+                s2?.delete(k1);
+                if (s2 && s2.size === 0) this.connectivityGraph.delete(k2);
+            }
         }
     }
 
@@ -198,7 +214,7 @@ export class Path {
         const outlineWidth = 24;
         const size = 32;
 
-        const drawPass = (w: number, color: number) => {
+        const drawPass = (w: number, color: number, isOutline: boolean) => {
             g.lineStyle(w, color, 1);
             this.paths.forEach((p) => {
                 const x1 = (p.points[0].x + 0.5) * size;
@@ -206,6 +222,22 @@ export class Path {
                 const x2 = (p.points[1].x + 0.5) * size;
                 const y2 = (p.points[1].y + 0.5) * size;
                 g.lineBetween(x1, y1, x2, y2);
+
+                if (!isOutline && p.isOneWay) {
+                    // Draw direction arrow
+                    const angle = Phaser.Math.Angle.Between(x1, y1, x2, y2);
+                    const midX = (x1 + x2) / 2;
+                    const midY = (y1 + y2) / 2;
+                    const arrowSize = 6;
+                    
+                    g.fillStyle(outlineColor, 0.8);
+                    g.beginPath();
+                    g.moveTo(midX + Math.cos(angle) * arrowSize, midY + Math.sin(angle) * arrowSize);
+                    g.lineTo(midX + Math.cos(angle + 2.5) * arrowSize, midY + Math.sin(angle + 2.5) * arrowSize);
+                    g.lineTo(midX + Math.cos(angle - 2.5) * arrowSize, midY + Math.sin(angle - 2.5) * arrowSize);
+                    g.closePath();
+                    g.fillPath();
+                }
             });
 
             // Draw circles at all nodes to make corners look joined
@@ -216,7 +248,7 @@ export class Path {
             });
         };
 
-        drawPass(outlineWidth, outlineColor);
-        drawPass(lineWidth, pathColor);
+        drawPass(outlineWidth, outlineColor, true);
+        drawPass(lineWidth, pathColor, false);
     }
 }

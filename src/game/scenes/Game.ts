@@ -4,6 +4,7 @@ import { Building } from "../Building";
 import { House } from "../House";
 import { Worker } from "../Worker";
 import { Path } from "../Path";
+import { Roundabout } from "../Roundabout";
 
 export class Game extends Scene {
     camera: Phaser.Cameras.Scene2D.Camera;
@@ -13,11 +14,15 @@ export class Game extends Scene {
 
     public buildings: Building[] = [];
     public houses: House[] = [];
+    public roundabouts: Roundabout[] = [];
     private workers: Worker[] = [];
+    
+    private placementMode: "ROAD" | "ROUNDABOUT" = "ROAD";
     private isDrawing: boolean = false;
     private isDeleting: boolean = false;
     private shadowPath: Phaser.GameObjects.Rectangle | null = null;
     private shadowLine: Phaser.GameObjects.Line | null = null;
+    private shadowRoundabout: Phaser.GameObjects.Graphics | null = null;
     private dragStartGrid: { x: number, y: number } | null = null;
     private lastSpawnTime: number = 0; // For worker spawning
     private lastStructureSpawnTime: number = 0; // For houses/buildings
@@ -94,21 +99,23 @@ export class Game extends Scene {
             const gy = Math.floor(worldPointer.y / Building.GRID_SIZE);
 
             if (pointer.leftButtonDown()) {
-                // If there's a house here, we don't return early; we allow starting a drag
-                // to rotate it or draw from its driveway.
-                const isOccupiedByStructure = this.isGridOccupied(gx, gy);
-                const house = this.getHouseAt(gx, gy);
-                
-                if (isOccupiedByStructure && !house) return;
+                if (this.placementMode === "ROAD") {
+                    const isOccupiedByStructure = this.isGridOccupied(gx, gy);
+                    const house = this.getHouseAt(gx, gy);
+                    
+                    if (isOccupiedByStructure && !house) return;
 
-                this.isDrawing = true;
-                this.isDeleting = false;
-                this.dragStartGrid = { x: gx, y: gy };
-                
-                this.updateShadowPath(gx, gy);
-                // Only add path if not on a structure footprint
-                if (!isOccupiedByStructure) {
-                    this.addPathAtGrid(gx, gy);
+                    this.isDrawing = true;
+                    this.isDeleting = false;
+                    this.dragStartGrid = { x: gx, y: gy };
+                    
+                    this.updateShadowPath(gx, gy);
+                    if (!isOccupiedByStructure) {
+                        this.addPathAtGrid(gx, gy);
+                    }
+                } else if (this.placementMode === "ROUNDABOUT") {
+                    const offset = Math.floor(Roundabout.SIZE / 2);
+                    this.placeRoundabout(gx - offset, gy - offset);
                 }
             } else if (pointer.rightButtonDown()) {
                 this.isDeleting = true;
@@ -122,9 +129,10 @@ export class Game extends Scene {
             const gx = Math.floor(worldPointer.x / Building.GRID_SIZE);
             const gy = Math.floor(worldPointer.y / Building.GRID_SIZE);
 
+            // Always update the shadow highlight
+            this.updateShadowPath(gx, gy);
+
             if (this.isDrawing && this.dragStartGrid) {
-                this.updateShadowPath(gx, gy);
-                
                 const dx = gx - this.dragStartGrid.x;
                 const dy = gy - this.dragStartGrid.y;
 
@@ -196,9 +204,49 @@ export class Game extends Scene {
             this.shadowPath.setOrigin(0, 0);
             this.shadowPath.setDepth(2);
         }
+
+        if (this.placementMode === "ROUNDABOUT") {
+            if (!this.shadowRoundabout) {
+                this.shadowRoundabout = this.add.graphics();
+                this.shadowRoundabout.setDepth(2.5);
+            }
+            this.shadowRoundabout.clear();
+            
+            const offset = Math.floor(Roundabout.SIZE / 2);
+            const tgx = gx - offset;
+            const tgy = gy - offset;
+            
+            const size = Roundabout.SIZE * Building.GRID_SIZE;
+            const canPlace = Roundabout.canPlaceAt(this, tgx, tgy);
+            
+            // Draw the roundabout ghost centered
+            this.shadowRoundabout.setPosition(tgx * Building.GRID_SIZE, tgy * Building.GRID_SIZE);
+            Roundabout.draw(this.shadowRoundabout, size, 0.5);
+            
+            // Add a red/green overlay to indicate valid placement
+            this.shadowRoundabout.fillStyle(canPlace ? 0x00ff00 : 0xff0000, 0.2);
+            this.shadowRoundabout.fillRect(0, 0, size, size);
+            
+            this.shadowRoundabout.setVisible(true);
+            if (this.shadowPath) this.shadowPath.setVisible(false);
+            if (this.shadowLine) this.shadowLine.setVisible(false);
+            return;
+        }
+
+        if (this.shadowRoundabout) this.shadowRoundabout.setVisible(false);
+
+        // ROAD mode
+        this.shadowPath.setSize(Building.GRID_SIZE, Building.GRID_SIZE);
+        this.shadowPath.setFillStyle(0xdca26f, 0.2);
         this.shadowPath.setPosition(gx * Building.GRID_SIZE, gy * Building.GRID_SIZE);
         const occupied = this.isGridOccupied(gx, gy);
-        this.shadowPath.setVisible(!occupied);
+        // Show hover highlight even if occupied (subtle hint of where the mouse is)
+        this.shadowPath.setVisible(true);
+        if (occupied) {
+            this.shadowPath.setFillStyle(0xff0000, 0.1); // Light red for occupied
+        } else {
+            this.shadowPath.setFillStyle(0xdca26f, 0.3); // Normal road color
+        }
 
         // Add a line connecting drag start to current shadow
         if (this.dragStartGrid) {
@@ -217,6 +265,38 @@ export class Game extends Scene {
         }
     }
 
+    private placeRoundabout(gx: number, gy: number) {
+        if (Roundabout.canPlaceAt(this, gx, gy)) {
+            const rb = new Roundabout(this, gx, gy);
+            this.roundabouts.push(rb);
+            
+            // Mark as occupied in structure grid
+            for (let ox = 0; ox < Roundabout.SIZE; ox++) {
+                for (let oy = 0; oy < Roundabout.SIZE; oy++) {
+                    this.structureGrid.set(`${gx + ox},${gy + oy}`, rb as any);
+                }
+            }
+            
+            // Re-render paths to show connectivity
+            Path.render();
+            
+            // Switch back to ROAD mode after placement (optional, Mini Motorways does this)
+            this.setPlacementMode("ROAD");
+        }
+    }
+
+    public setPlacementMode(mode: "ROAD" | "ROUNDABOUT") {
+        this.placementMode = mode;
+        if (this.shadowPath) this.shadowPath.setVisible(false);
+        if (this.shadowLine) this.shadowLine.setVisible(false);
+        if (this.shadowRoundabout) this.shadowRoundabout.setVisible(false);
+        this.dragStartGrid = null;
+        this.isDrawing = false;
+        
+        // Notify UI if needed via EventBus
+        EventBus.emit("placement-mode-changed", mode);
+    }
+
     private getHouseAt(gx: number, gy: number): House | undefined {
         return this.houses.find(h => {
             const hw = Math.floor(h.width / 32);
@@ -226,13 +306,18 @@ export class Game extends Scene {
     }
 
     private isGridOccupied(gx: number, gy: number, includePaths: boolean = false): boolean {
-        const hasStructure = this.structureGrid.has(`${gx},${gy}`);
+        const structure = this.structureGrid.get(`${gx},${gy}`);
         
-        if (includePaths && Path.isAt(gx, gy)) {
-            return true;
+        if (includePaths) {
+            return !!structure || Path.isAt(gx, gy);
         }
 
-        return hasStructure;
+        // Roundabouts don't block road placement
+        if (structure instanceof Roundabout) {
+            return false;
+        }
+
+        return !!structure;
     }
 
     private isPastHalfwayInto(pointer: { x: number, y: number }, from: { x: number, y: number }, to: { x: number, y: number }): boolean {
@@ -289,6 +374,30 @@ export class Game extends Scene {
     }
 
     private removePathAtGrid(gridX: number, gridY: number) {
+        const structure = this.structureGrid.get(`${gridX},${gridY}`);
+        if (structure instanceof Roundabout) {
+            const rb = structure as Roundabout;
+            const sx = rb.gridX;
+            const sy = rb.gridY;
+            
+            // 1. Remove from structureGrid (all 3x3 cells)
+            for (let ox = 0; ox < Roundabout.SIZE; ox++) {
+                for (let oy = 0; oy < Roundabout.SIZE; oy++) {
+                    this.structureGrid.delete(`${sx + ox},${sy + oy}`);
+                }
+            }
+            
+            // 2. Remove from roundabouts array
+            this.roundabouts = this.roundabouts.filter(r => r !== rb);
+            
+            // 3. Cleanup paths and destroy container
+            rb.removeRoundabout();
+            
+            // 4. Force re-render
+            Path.render();
+            return;
+        }
+
         Path.removeAt(gridX, gridY);
     }
 

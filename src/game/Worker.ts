@@ -2,6 +2,7 @@ import { Scene, GameObjects } from "phaser";
 import { Building } from "./Building";
 import { House } from "./House";
 import { Path } from "./Path";
+import { Roundabout } from "./Roundabout";
 
 export enum WorkerState {
     IDLE,
@@ -28,6 +29,7 @@ export class Worker extends GameObjects.Container {
     public isDespawned: boolean = false;
     private appliedMultiplier: number = 0; 
     private uniqueId: number = Math.random(); // Unique ID for priority yielding
+    private lastNetworkVersion: number = -1; 
 
     private headlights: GameObjects.Image;
 
@@ -221,6 +223,13 @@ export class Worker extends GameObjects.Container {
         }
 
         // Recalculate path if target changed or we don't have one
+        // Also force recalculation if the global road network has been modified (addition/deletion)
+        if (this.lastNetworkVersion !== Path.networkVersion) {
+            this.lastPathTargetKey = ""; 
+            this.currentPath = []; 
+            this.lastNetworkVersion = Path.networkVersion;
+        }
+
         if (
             this.lastPathTargetKey !== targetKey ||
             this.currentPath.length === 0
@@ -320,9 +329,9 @@ export class Worker extends GameObjects.Container {
         let isStopped = false;
         
         // --- HARD GHOSTING (FAIL-SAFE) ---
-        // If stuck for too long (3s+), ignore collisions entirely to clear the jam.
-        const isGhosting = this.waitTimer > 3.0;
-        const isFrustrated = this.waitTimer > 1.2;
+        // If stuck or moving very slowly for too long (2s+), ignore collisions to clear jams.
+        const isGhosting = this.waitTimer > 2.0; 
+        const isFrustrated = this.waitTimer > 1.0;
 
         // If ghosting, we just move. No collision check.
         if (!isGhosting) {
@@ -338,6 +347,9 @@ export class Worker extends GameObjects.Container {
 
                     for (const other of neighbors) {
                         if (other === this || other.isDespawned) continue;
+
+                        const otherGx = Math.floor(other.x / Building.GRID_SIZE);
+                        const otherGy = Math.floor(other.y / Building.GRID_SIZE);
 
                         const dist = Phaser.Math.Distance.Between(this.x, this.y, other.x, other.y);
                         if (dist < slowDistance) {
@@ -357,13 +369,25 @@ export class Worker extends GameObjects.Container {
                                 const theyAreLookingAtUs = Math.abs(otherDiff) < 25;
 
                                 if (theyAreLookingAtUs) {
+                                    // PRIORITY 1: Yield to Roundabout
+                                    // If I am NOT in a roundabout but they ARE, I MUST stop.
+                                    const IAmInRoundabout = game.structureGrid.get(`${gx},${gy}`) instanceof Roundabout;
+                                    const TheyAreInRoundabout = game.structureGrid.get(`${otherGx},${otherGy}`) instanceof Roundabout;
+                                    
+                                    if (!IAmInRoundabout && TheyAreInRoundabout) {
+                                        isStopped = true;
+                                        targetMultiplier = 0;
+                                        break;
+                                    }
+
+                                    // PRIORITY 2: ID-based deadlock resolution
                                     if (this.uniqueId > (other as any).uniqueId) {
                                         if (!isFrustrated) {
                                             isStopped = true;
                                             targetMultiplier = 0;
                                             break;
                                         } else {
-                                            targetMultiplier = Math.min(targetMultiplier, 0.3);
+                                            targetMultiplier = Math.min(targetMultiplier, 0.4);
                                             continue;
                                         }
                                     } else {
@@ -393,28 +417,25 @@ export class Worker extends GameObjects.Container {
             }
         }
 
-        // Apply smooth acceleration and braking
-        if (isStopped) {
-            this.appliedMultiplier = 0; 
+        // Decay frustration if we are moving at a healthy speed (>50%)
+        // Increase frustration if we are crawling or stopped
+        if (targetMultiplier < 0.5) {
             this.waitTimer += deltaSeconds;
-            return;
+        } else {
+            this.waitTimer = Math.max(0, this.waitTimer - deltaSeconds * 2);
         }
 
-        // Decay the wait timer faster if we are successfully moving
-        this.waitTimer = Math.max(0, this.waitTimer - deltaSeconds * 4);
-
-        // ACCELERATION/BRAKE PHYSIC:
-        // Acceleration speed (rising multiplier) should be slower. 
-        // Braking speed (falling multiplier) should be fast.
-        if (this.appliedMultiplier < targetMultiplier) {
-            // Speeding up - slow acceleration (0.8/sec)
-            this.appliedMultiplier = Math.min(targetMultiplier, this.appliedMultiplier + deltaSeconds * 0.8);
+        // ACCELERATION/BRAKE PHYSICS:
+        if (isStopped) {
+            this.appliedMultiplier = Math.max(0, this.appliedMultiplier - deltaSeconds * 3);
+        } else if (this.appliedMultiplier < targetMultiplier) {
+            this.appliedMultiplier = Math.min(targetMultiplier, this.appliedMultiplier + deltaSeconds * 1.5);
         } else if (this.appliedMultiplier > targetMultiplier) {
-            // Slowing down - fast braking (2.5/sec)
-            this.appliedMultiplier = Math.max(targetMultiplier, this.appliedMultiplier - deltaSeconds * 2.5);
+            this.appliedMultiplier = Math.max(targetMultiplier, this.appliedMultiplier - deltaSeconds * 3);
         }
 
-        this.waitTimer = Math.max(0, this.waitTimer - deltaSeconds * 2);
+        // --- OLD EXTRA DECAY REMOVED ---
+        // (Removing the line that was unconditionally subtracting from waitTimer)
 
         const distance = Phaser.Math.Distance.Between(this.x, this.y, targetX, targetY);
         const currentSpeed = this.speed * this.appliedMultiplier;
@@ -518,14 +539,15 @@ export class Worker extends GameObjects.Container {
                 });
             }
 
-            // 2. If inside a structure, handle movement within it
+            // 2. If inside a structure (Building/House), handle free movement within it.
+            // EXCEPTION: Roundabouts MUST follow the path network (one-way logic).
             const currentStruct = getStructureAt(x, y);
-            if (currentStruct) {
-                const adjacent = [
+            if (currentStruct && !(currentStruct instanceof Roundabout)) {
+                const adjacentSnapshot = [
                     { x: x + 1, y }, { x: x - 1, y }, { x, y: y + 1 }, { x, y: y - 1 },
                     { x: x + 1, y: y + 1 }, { x: x + 1, y: y - 1 }, { x: x - 1, y: y + 1 }, { x: x - 1, y: y - 1 }
                 ];
-                for (const adj of adjacent) {
+                for (const adj of adjacentSnapshot) {
                     if (getStructureAt(adj.x, adj.y) === currentStruct) {
                          if (!neighborCoords.some(n => n.x === adj.x && n.y === adj.y)) {
                             neighborCoords.push(adj);
