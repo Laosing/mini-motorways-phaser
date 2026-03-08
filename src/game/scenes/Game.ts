@@ -512,35 +512,58 @@ export class Game extends Scene {
         const structureColor = this.colorPalette[colorIndex];
 
         // 1. House Clustering Logic:
-        if (isHouse) {
-            const sameColorHouses = this.houses.filter(h => h.bodyColor === structureColor);
-            if (sameColorHouses.length > 0) {
-                Phaser.Utils.Array.Shuffle(sameColorHouses);
-                for (const neighbor of sameColorHouses) {
-                    const searchZone: { gx: number, gy: number }[] = [];
-                    for (let dx = -2; dx <= 2; dx++) {
-                        for (let dy = -2; dy <= 2; dy++) {
-                            if (dx === 0 && dy === 0) continue;
-                            searchZone.push({ gx: neighbor.gridX + dx, gy: neighbor.gridY + dy });
-                        }
-                    }
-                    Phaser.Utils.Array.Shuffle(searchZone);
+        const sameColorHouses = this.houses.filter(h => h.bodyColor === structureColor);
+        const shouldSeedNewNeighborhood = isHouse && sameColorHouses.length > 0 && (sameColorHouses.length % 6 === 5);
 
-                    for (const adj of searchZone) {
-                        if (this.tryToSpawnAt(adj.gx, adj.gy, w, h, isHouse, structureColor)) {
-                            this.structureSpawnCounter++;
-                            return; 
-                        }
+        if (isHouse && sameColorHouses.length > 0 && !shouldSeedNewNeighborhood) {
+            // Growth phase: preferred houses with FEWER neighbors to grow neighborhoods balancedly
+            const sameColorHousesWithCounts = sameColorHouses.map(h => {
+                const neighbors = sameColorHouses.filter(other => 
+                    other !== h && Phaser.Math.Distance.Between(h.gridX, h.gridY, other.gridX, other.gridY) <= 2
+                );
+                return { house: h, count: neighbors.length };
+            });
+            
+            // Shuffle then Sort by count ascending (grow sparse areas/new seeds first)
+            Phaser.Utils.Array.Shuffle(sameColorHousesWithCounts);
+            sameColorHousesWithCounts.sort((a, b) => a.count - b.count);
+
+            for (const entry of sameColorHousesWithCounts) {
+                const neighbor = entry.house;
+                const searchZone: { gx: number, gy: number }[] = [];
+                for (let dx = -2; dx <= 2; dx++) {
+                    for (let dy = -2; dy <= 2; dy++) {
+                        if (dx === 0 && dy === 0) continue;
+                        searchZone.push({ gx: neighbor.gridX + dx, gy: neighbor.gridY + dy });
+                    }
+                }
+                Phaser.Utils.Array.Shuffle(searchZone);
+
+                for (const adj of searchZone) {
+                    if (this.tryToSpawnAt(adj.gx, adj.gy, w, h, isHouse, structureColor)) {
+                        this.structureSpawnCounter++;
+                        return; 
                     }
                 }
             }
         }
 
-        // 2. Fallback: Increased search thoroughness (500 trials)
+        // 2. Fallback / Seed Selection: Increased search thoroughness (500 trials)
         for (let i = 0; i < 500; i++) {
             const gx = Math.floor(Math.random() * (gridW - w + 1));
             const gy = Math.floor(Math.random() * (gridH - h + 1));
             
+            // If seeding a new neighborhood, prioritize spots FAR from existing same-color houses
+            if (shouldSeedNewNeighborhood) {
+                const minDist = sameColorHouses.reduce((min, h) => {
+                    const d = Phaser.Math.Distance.Between(gx, gy, h.gridX, h.gridY);
+                    return Math.min(min, d);
+                }, Infinity);
+                
+                // Require at least 10 tiles distance for a new neighborhood seed
+                if (minDist < 10 && i < 450) continue; 
+            }
+
             if (this.tryToSpawnAt(gx, gy, w, h, isHouse, structureColor)) {
                 this.structureSpawnCounter++;
                 return; 

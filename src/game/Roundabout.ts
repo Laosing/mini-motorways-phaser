@@ -10,8 +10,6 @@ export class Roundabout extends GameObjects.Container {
     constructor(scene: Scene, gridX: number, gridY: number) {
         const x = gridX * Building.GRID_SIZE;
         const y = gridY * Building.GRID_SIZE;
-        const pixelSize = Roundabout.SIZE * Building.GRID_SIZE;
-
         super(scene, x, y);
 
         this.gridX = gridX;
