@@ -399,14 +399,13 @@ export class Game extends Scene {
         const colorIndex = Math.floor(this.structureSpawnCounter / 3) % this.colorPalette.length;
         const structureColor = this.colorPalette[colorIndex];
 
-        // 1. House Clustering Logic (Radius 2):
+        // 1. House Clustering Logic:
         if (isHouse) {
             const sameColorHouses = this.houses.filter(h => h.bodyColor === structureColor);
             if (sameColorHouses.length > 0) {
                 Phaser.Utils.Array.Shuffle(sameColorHouses);
                 for (const neighbor of sameColorHouses) {
                     const searchZone: { gx: number, gy: number }[] = [];
-                    // Radius 2 search (including diagonals)
                     for (let dx = -2; dx <= 2; dx++) {
                         for (let dy = -2; dy <= 2; dy++) {
                             if (dx === 0 && dy === 0) continue;
@@ -418,22 +417,21 @@ export class Game extends Scene {
                     for (const adj of searchZone) {
                         if (this.tryToSpawnAt(adj.gx, adj.gy, w, h, isHouse, structureColor)) {
                             this.structureSpawnCounter++;
-                            return; // SUCCESS!
+                            return; 
                         }
                     }
                 }
             }
         }
 
-        // 2. Fallback: Systematic Random search
-        // Check 100 random spots to be really thorough
-        for (let i = 0; i < 100; i++) {
-            const gx = Math.floor(Math.random() * (gridW - w));
-            const gy = Math.floor(Math.random() * (gridH - h));
+        // 2. Fallback: Increased search thoroughness (500 trials)
+        for (let i = 0; i < 500; i++) {
+            const gx = Math.floor(Math.random() * (gridW - w + 1));
+            const gy = Math.floor(Math.random() * (gridH - h + 1));
             
             if (this.tryToSpawnAt(gx, gy, w, h, isHouse, structureColor)) {
                 this.structureSpawnCounter++;
-                return; // SUCCESS!
+                return; 
             }
         }
     }
@@ -449,19 +447,42 @@ export class Game extends Scene {
         // Try orientations
         Phaser.Utils.Array.Shuffle(orientations);
         for (const entranceDir of orientations) {
-            let drivewayX = gx;
-            let drivewayY = gy;
-            if (entranceDir === "down") { drivewayY = gy + h; }
-            else if (entranceDir === "up") { drivewayY = gy - 1; }
-            else if (entranceDir === "left") { drivewayX = gx - 1; }
-            else if (entranceDir === "right") { drivewayX = gx + w; }
+            const driveways: { x: number; y: number }[] = [];
+            // Primary driveway
+            let d1x = gx, d1y = gy;
+            if (entranceDir === "down") d1y = gy + h;
+            else if (entranceDir === "up") d1y = gy - 1;
+            else if (entranceDir === "left") d1x = gx - 1;
+            else if (entranceDir === "right") d1x = gx + w;
+            driveways.push({ x: d1x, y: d1y });
 
-            if (drivewayX < 0 || drivewayX >= gridW || drivewayY < 0 || drivewayY >= gridH) continue;
+            // Secondary driveway for buildings (opposite side)
+            if (!isHouse) {
+                const opposites: Record<string, string> = { up: "down", down: "up", left: "right", right: "left" };
+                const oppDir = opposites[entranceDir];
+                let d2x = gx, d2y = gy;
+                if (oppDir === "down") d2y = gy + h;
+                else if (oppDir === "up") d2y = gy - 1;
+                else if (oppDir === "left") d2x = gx - 1;
+                else if (oppDir === "right") d2x = gx + w;
+                driveways.push({ x: d2x, y: d2y });
+            }
 
-            // 1. FOOTPRINT CHECK: Must be 100% empty (no buffer here to allow adjacency)
+            // Bounds check for all driveways
+            let outOfBounds = false;
+            for (const d of driveways) {
+                if (d.x < 0 || d.x >= gridW || d.y < 0 || d.y >= gridH) {
+                    outOfBounds = true;
+                    break;
+                }
+            }
+            if (outOfBounds) continue;
+
+            // 1. FOOTPRINT CHECK: Must be clear of OTHER STRUCTURES and PATHS
             let footprintConflict = false;
             for (let ox = 0; ox < w; ox++) {
                 for (let oy = 0; oy < h; oy++) {
+                    // We check for paths here to prevent spawning on user-placed roads
                     if (this.isGridOccupied(gx + ox, gy + oy, true)) {
                         footprintConflict = true; break;
                     }
@@ -470,18 +491,25 @@ export class Game extends Scene {
             }
             if (footprintConflict) continue;
 
-            // 2. DRIVEWAY CHECK: Must be empty (no building and no path blocking entrance)
-            if (this.isGridOccupied(drivewayX, drivewayY, true)) continue;
+            // 2. DRIVEWAY CHECK: All driveways must be structurally empty (no other buildings)
+            let drivewayConflict = false;
+            for (const d of driveways) {
+                // We DON'T include paths here because buildings connect TO roads.
+                if (this.isGridOccupied(d.x, d.y, false)) {
+                    drivewayConflict = true;
+                    break;
+                }
+            }
+            if (driveways.length > 0 && drivewayConflict) continue; // Only continue if there are driveways and a conflict
 
             // 3. (Optional) SEPARATION BUFFER:
-            // We want buildings (2x3) to stay 1 cell away from everything else
-            // but let houses (1x1) be neighbors.
+            // Still check distance between separate buildings
             if (!isHouse) {
                 let bufferConflict = false;
                 for (let ox = -1; ox <= w; ox++) {
                     for (let oy = -1; oy <= h; oy++) {
                         if (ox >= 0 && ox < w && oy >= 0 && oy < h) continue; // Skip footprint
-                        if (this.isGridOccupied(gx + ox, gy + oy, false)) { // Only care about buildings/houses
+                        if (this.isGridOccupied(gx + ox, gy + oy, false)) { 
                             bufferConflict = true; break;
                         }
                     }
@@ -490,7 +518,7 @@ export class Game extends Scene {
                 if (bufferConflict) continue;
             }
 
-            // ALL CLEAR
+            // ALL CLEAR - SPAWN!
             if (isHouse) {
                 const house = new House(this, gx, gy, 1, 1, color, entranceDir as any);
                 this.houses.push(house);

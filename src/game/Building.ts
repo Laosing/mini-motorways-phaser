@@ -49,87 +49,88 @@ export class Building extends GameObjects.Container {
         shape.setOrigin(0, 0);
         this.add(shape);
 
-        // Determine entrance direction and position
+        // Determine entrance directions
         const directions = ["up", "down", "left", "right"] as const;
-        const finalDir = entranceDir || directions[Math.floor(Math.random() * directions.length)];
-        
-        // Door local position and dimensions
-        let doorX = 16;
-        let doorY = height;
-        let doorW = 16;
-        let doorH = 4;
-        
-        // Driveway target grid
-        let dTargetX = gridX;
-        let dTargetY = gridY + gridHeight;
-        let dStartX = gridX;
-        let dStartY = gridY + gridHeight - 1;
+        const primaryDir = entranceDir || directions[Math.floor(Math.random() * directions.length)];
+        const opposites: Record<string, "up" | "down" | "left" | "right"> = { up: "down", down: "up", left: "right", right: "left" };
+        const finalDirs = [primaryDir, opposites[primaryDir]];
 
         // Custom border graphics
         const border = scene.add.graphics();
         border.lineStyle(3, 0x2c3e50);
         border.beginPath();
 
-        if (finalDir === "down") {
-            // Already set by defaults above (but ensuring here)
-            dStartX = gridX; dStartY = gridY + gridHeight - 1;
-            dTargetX = gridX; dTargetY = gridY + gridHeight;
-            doorX = 16; doorY = height; doorW = 16; doorH = 4;
-            
+        // Draw border segments with gaps for TWO doors
+        if (primaryDir === "up" || primaryDir === "down") {
+            // Horizontal gaps on top and bottom
+            // Segment 1: Bottom Right
             border.moveTo(24, height);
             border.lineTo(width, height);
+            // Segment 2: Right Edge
             border.lineTo(width, 0);
-            border.lineTo(0, 0);
-            border.lineTo(0, height);
-            border.lineTo(8, height);
-        } else if (finalDir === "up") {
-            dStartX = gridX; dStartY = gridY;
-            dTargetX = gridX; dTargetY = gridY - 1;
-            doorX = 16; doorY = 0; doorW = 16; doorH = 4;
+            // Segment 3: Top Right
+            border.lineTo(24, 0);
 
+            // Segment 4: Top Left
             border.moveTo(8, 0);
             border.lineTo(0, 0);
+            // Segment 5: Left Edge
             border.lineTo(0, height);
-            border.lineTo(width, height);
-            border.lineTo(width, 0);
-            border.lineTo(24, 0);
-        } else if (finalDir === "left") {
-            dStartX = gridX; dStartY = gridY;
-            dTargetX = gridX - 1; dTargetY = gridY;
-            doorX = 0; doorY = 16; doorW = 4; doorH = 16;
-
+            // Segment 6: Bottom Left
+            border.lineTo(8, height);
+        } else {
+            // Vertical gaps on left and right
+            // Segment 1: Left Bottom
             border.moveTo(0, 24);
             border.lineTo(0, height);
+            // Segment 2: Bottom Edge
             border.lineTo(width, height);
-            border.lineTo(width, 0);
-            border.lineTo(0, 0);
-            border.lineTo(0, 8);
-        } else if (finalDir === "right") {
-            dStartX = gridX + gridWidth - 1; dStartY = gridY;
-            dTargetX = gridX + gridWidth; dTargetY = gridY;
-            doorX = width; doorY = 16; doorW = 4; doorH = 16;
+            // Segment 3: Right Bottom
+            border.lineTo(width, 24);
 
+            // Segment 4: Right Top
             border.moveTo(width, 8);
             border.lineTo(width, 0);
+            // Segment 5: Top Edge
             border.lineTo(0, 0);
-            border.lineTo(0, height);
-            border.lineTo(width, height);
-            border.lineTo(width, 24);
+            // Segment 6: Left Top
+            border.lineTo(0, 8);
         }
 
         border.strokePath();
         this.add(border);
 
-        // Door visual
-        const door = scene.add.rectangle(doorX, doorY, doorW, doorH, color);
-        this.add(door);
+        // Create two doors and two driveways
+        finalDirs.forEach(dir => {
+            let doorX = 16, doorY = height, doorW = 16, doorH = 4;
+            let dStartX = gridX, dStartY = gridY + gridHeight - 1;
+            let dTargetX = gridX, dTargetY = gridY + gridHeight;
+
+            if (dir === "up") {
+                dStartX = gridX; dStartY = gridY;
+                dTargetX = gridX; dTargetY = gridY - 1;
+                doorX = 16; doorY = 0; doorW = 16; doorH = 4;
+            } else if (dir === "left") {
+                dStartX = gridX; dStartY = gridY;
+                dTargetX = gridX - 1; dTargetY = gridY;
+                doorX = 0; doorY = 16; doorW = 4; doorH = 16;
+            } else if (dir === "right") {
+                dStartX = gridX + gridWidth - 1; dStartY = gridY;
+                dTargetX = gridX + gridWidth; dTargetY = gridY;
+                doorX = width; doorY = 16; doorW = 4; doorH = 16;
+            }
+            // "down" is the default case initialization above
+
+            const doorSegment = scene.add.rectangle(doorX, doorY, doorW, doorH, color);
+            this.add(doorSegment);
+
+            // Create automatic entrance path (fixture)
+            Path.add(scene, dStartX, dStartY, dTargetX, dTargetY, true);
+        });
 
         scene.add.existing(this);
         this.setSize(width, height);
         this.setDepth(2);
-
-        // Create automatic entrance path (fixture)
-        Path.add(scene, dStartX, dStartY, dTargetX, dTargetY, true);
 
         // Initial appearance
         this.setAlpha(0);

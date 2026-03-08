@@ -99,10 +99,27 @@ export class Path {
 
     public static removeAt(gridX: number, gridY: number) {
         const toRemove = this.paths.filter(
-            (p) =>
-                !p.isFixture &&
-                ((p.points[0].x === gridX && p.points[0].y === gridY) ||
-                    (p.points[1].x === gridX && p.points[1].y === gridY)),
+            (p) => {
+                if (p.isFixture) return false;
+                
+                // 1. Node check
+                if ((p.points[0].x === gridX && p.points[0].y === gridY) ||
+                    (p.points[1].x === gridX && p.points[1].y === gridY)) {
+                    return true;
+                }
+
+                // 2. Diagonal clipping check (elbow removal)
+                const x1 = p.points[0].x;
+                const y1 = p.points[0].y;
+                const x2 = p.points[1].x;
+                const y2 = p.points[1].y;
+                if (Math.abs(x1 - x2) === 1 && Math.abs(y1 - y2) === 1) {
+                    if ((gridX === x1 && gridY === y2) || (gridX === x2 && gridY === y1)) {
+                        return true;
+                    }
+                }
+                return false;
+            }
         );
 
         if (toRemove.length === 0) return;
