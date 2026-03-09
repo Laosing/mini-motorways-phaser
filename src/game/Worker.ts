@@ -502,13 +502,19 @@ export class Worker extends GameObjects.Container {
 
         if (!graph.has(`${startGridX},${startGridY}`) && !getStructureAt(startGridX, startGridY)) {
             const isSubterranean = this.depth < 5;
-            const pathsAtCell = Path.pathGrid.get(`${startGridX},${startGridY}`);
-
             // 1. Layer-Appropriate Snap: Find path matching current traversal level
-            const matchingPath = pathsAtCell?.find(p => p.isMotorway === isSubterranean);
+            // Check current cell and a 1-cell radius for a matching path segment
+            let matchingPath: Path | undefined;
+
+            for (let dx = -1; dx <= 1 && !matchingPath; dx++) {
+                for (let dy = -1; dy <= 1 && !matchingPath; dy++) {
+                    const paths = Path.pathGrid.get(`${startGridX + dx},${startGridY + dy}`);
+                    matchingPath = paths?.find(p => p.isMotorway === isSubterranean);
+                }
+            }
             
             if (matchingPath) {
-                // Snap to endpoints of the current segment we are physically on
+                // Snap to endpoints of the current segment we found
                 matchingPath.points.forEach(p => {
                     const key = `${p.x},${p.y}`;
                     if (graph.has(key) && !visited.has(key)) {
@@ -517,17 +523,22 @@ export class Worker extends GameObjects.Container {
                     }
                 });
             } else if (isSubterranean) {
-                // If we are subterranean but somehow not on a motorway cell (e.g. moved too far)
+                // If we are subterranean but somehow not on a motorway cell 
                 // Try to find ANY nearby motorway endpoint to get back on track
-                const nearbyMotorway = pathsAtCell?.find(p => p.isMotorway);
-                if (nearbyMotorway) {
-                    nearbyMotorway.points.forEach(p => {
-                        const key = `${p.x},${p.y}`;
-                        if (graph.has(key) && !visited.has(key)) {
-                            queue.push({ x: p.x, y: p.y, path: [{ x: p.x, y: p.y }] });
-                            visited.add(key);
+                for (let dx = -1; dx <= 1; dx++) {
+                    for (let dy = -1; dy <= 1; dy++) {
+                        const paths = Path.pathGrid.get(`${startGridX + dx},${startGridY + dy}`);
+                        const nearbyMotorway = paths?.find(p => p.isMotorway);
+                        if (nearbyMotorway) {
+                            nearbyMotorway.points.forEach(p => {
+                                const key = `${p.x},${p.y}`;
+                                if (graph.has(key) && !visited.has(key)) {
+                                    queue.push({ x: p.x, y: p.y, path: [{ x: p.x, y: p.y }] });
+                                    visited.add(key);
+                                }
+                            });
                         }
-                    });
+                    }
                 }
             }
 

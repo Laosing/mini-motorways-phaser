@@ -276,26 +276,36 @@ export class Path {
                 drawEntrance(p.points[1].x, p.points[1].y);
 
                 // Populate Grid for Tunnel (all cells it passes through)
-                const stepCount = Math.max(Math.abs(p.points[0].x - p.points[1].x), Math.abs(p.points[0].y - p.points[1].y)) * 2;
+                const distTiles = Math.max(Math.abs(p.points[0].x - p.points[1].x), Math.abs(p.points[0].y - p.points[1].y));
+                const stepCount = Math.ceil(distTiles * 4) + 1;
                 for (let i = 0; i <= stepCount; i++) {
                     const t = i / stepCount;
-                    const gx = Math.round(Phaser.Math.Linear(p.points[0].x, p.points[1].x, t));
-                    const gy = Math.round(Phaser.Math.Linear(p.points[0].y, p.points[1].y, t));
+                    const gx = Math.floor(p.points[0].x + (p.points[1].x - p.points[0].x) * t + 0.001);
+                    const gy = Math.floor(p.points[0].y + (p.points[1].y - p.points[0].y) * t + 0.001);
                     const key = `${gx},${gy}`;
                     if (!Path.pathGrid.has(key)) Path.pathGrid.set(key, []);
                     if (!Path.pathGrid.get(key)!.includes(p)) Path.pathGrid.get(key)!.push(p);
                 }
+                // Ensure the final endpoint cell is also definitely included
+                const endKey = `${p.points[1].x},${p.points[1].y}`;
+                if (!Path.pathGrid.has(endKey)) Path.pathGrid.set(endKey, []);
+                if (!Path.pathGrid.get(endKey)!.includes(p)) Path.pathGrid.get(endKey)!.push(p);
             } else {
                 // Populate Grid for Ground Road (ALL intermediate cells)
-                const stepCount = Math.max(Math.abs(p.points[0].x - p.points[1].x), Math.abs(p.points[0].y - p.points[1].y)) * 2;
+                const distTiles = Math.max(Math.abs(p.points[0].x - p.points[1].x), Math.abs(p.points[0].y - p.points[1].y));
+                const stepCount = Math.ceil(distTiles * 4) + 1;
                 for (let i = 0; i <= stepCount; i++) {
                     const t = i / stepCount;
-                    const gx = Math.round(Phaser.Math.Linear(p.points[0].x, p.points[1].x, t));
-                    const gy = Math.round(Phaser.Math.Linear(p.points[0].y, p.points[1].y, t));
+                    const gx = Math.floor(p.points[0].x + (p.points[1].x - p.points[0].x) * t + 0.001);
+                    const gy = Math.floor(p.points[0].y + (p.points[1].y - p.points[0].y) * t + 0.001);
                     const key = `${gx},${gy}`;
                     if (!this.pathGrid.has(key)) this.pathGrid.set(key, []);
                     if (!this.pathGrid.get(key)!.includes(p)) this.pathGrid.get(key)!.push(p);
                 }
+                // Ensure final endpoint
+                const endKey = `${p.points[1].x},${p.points[1].y}`;
+                if (!this.pathGrid.has(endKey)) this.pathGrid.set(endKey, []);
+                if (!this.pathGrid.get(endKey)!.includes(p)) this.pathGrid.get(endKey)!.push(p);
                 
                 // Handle diagonal gaps (ensuring adjacency for 8-way movement)
                 const dx = Math.abs(p.points[0].x - p.points[1].x);
