@@ -339,7 +339,7 @@ export class Worker extends GameObjects.Container {
         const isGhosting = this.waitTimer > 2.0; 
         const isFrustrated = this.waitTimer > 1.0;
 
-        if (!isGhosting) {
+        if (!isGhosting && this.depth >= 5) {
             const gx = Math.floor(this.x / Building.GRID_SIZE);
             const gy = Math.floor(this.y / Building.GRID_SIZE);
 
@@ -492,24 +492,46 @@ export class Worker extends GameObjects.Container {
 
         if (startGridX === targetGridX && startGridY === targetGridY) return [];
 
+        const currentCoordKey = `${startGridX},${startGridY}`;
+        const isCurrentlySubterranean = this.depth < 5;
+        
+        // 1. Determine if we are on a valid, layer-appropriate node already
+        let onValidNode = !!getStructureAt(startGridX, startGridY);
+        if (!onValidNode && graph.has(currentCoordKey)) {
+            if (isCurrentlySubterranean) {
+                // To start from a graph node while subterranean, it MUST be a motorway entrance
+                const pathsAtStart = Path.pathGrid.get(currentCoordKey);
+                const isMotorwayEntrance = pathsAtStart?.some(p => p.isMotorway && (
+                    (p.points[0].x === startGridX && p.points[0].y === startGridY) ||
+                    (p.points[1].x === startGridX && p.points[1].y === startGridY)
+                ));
+                if (isMotorwayEntrance) onValidNode = true;
+            } else {
+                // On surface, any graph node is valid for starting
+                if (graph.has(currentCoordKey)) onValidNode = true;
+            }
+        }
+
         const queue: {
             x: number;
             y: number;
+            isSub: boolean;
             path: { x: number; y: number }[];
-        }[] = [{ x: startGridX, y: startGridY, path: [] }];
+        }[] = [];
         const visited = new Set<string>();
-        visited.add(`${startGridX},${startGridY}`);
 
-        if (!graph.has(`${startGridX},${startGridY}`) && !getStructureAt(startGridX, startGridY)) {
-            const isSubterranean = this.depth < 5;
-            // 1. Layer-Appropriate Snap: Find path matching current traversal level
-            // Check current cell and a 1-cell radius for a matching path segment
+        if (onValidNode) {
+            queue.push({ x: startGridX, y: startGridY, isSub: isCurrentlySubterranean, path: [] });
+            visited.add(`${startGridX},${startGridY},${isCurrentlySubterranean}`);
+        } else {
+            // SNAP LOGIC: We are in the middle of a segment
             let matchingPath: Path | undefined;
 
+            // Layer-Appropriate Snap: Find path matching current traversal level
             for (let dx = -1; dx <= 1 && !matchingPath; dx++) {
                 for (let dy = -1; dy <= 1 && !matchingPath; dy++) {
                     const paths = Path.pathGrid.get(`${startGridX + dx},${startGridY + dy}`);
-                    matchingPath = paths?.find(p => p.isMotorway === isSubterranean);
+                    matchingPath = paths?.find(p => p.isMotorway === isCurrentlySubterranean);
                 }
             }
             
@@ -517,87 +539,96 @@ export class Worker extends GameObjects.Container {
                 // Snap to endpoints of the current segment we found
                 matchingPath.points.forEach(p => {
                     const key = `${p.x},${p.y}`;
-                    if (graph.has(key) && !visited.has(key)) {
-                        queue.push({ x: p.x, y: p.y, path: [{ x: p.x, y: p.y }] });
-                        visited.add(key);
-                    }
-                });
-            } else if (isSubterranean) {
-                // If we are subterranean but somehow not on a motorway cell 
-                // Try to find ANY nearby motorway endpoint to get back on track
-                for (let dx = -1; dx <= 1; dx++) {
-                    for (let dy = -1; dy <= 1; dy++) {
-                        const paths = Path.pathGrid.get(`${startGridX + dx},${startGridY + dy}`);
-                        const nearbyMotorway = paths?.find(p => p.isMotorway);
-                        if (nearbyMotorway) {
-                            nearbyMotorway.points.forEach(p => {
-                                const key = `${p.x},${p.y}`;
-                                if (graph.has(key) && !visited.has(key)) {
-                                    queue.push({ x: p.x, y: p.y, path: [{ x: p.x, y: p.y }] });
-                                    visited.add(key);
-                                }
-                            });
+                    if (graph.has(key)) {
+                        const stateKey = `${p.x},${p.y},${matchingPath!.isMotorway}`;
+                        if (!visited.has(stateKey)) {
+                            queue.push({ x: p.x, y: p.y, isSub: matchingPath!.isMotorway, path: [{ x: p.x, y: p.y }] });
+                            visited.add(stateKey);
                         }
                     }
-                }
+                });
             }
 
-            // 2. STANDARD SNAP: 1-cell radius fallback if layer snap failed or for surface workers
-            const snapAdjacents = [
-                {x: startGridX+1, y: startGridY}, {x: startGridX-1, y: startGridY}, 
-                {x: startGridX, y: startGridY+1}, {x: startGridX, y: startGridY-1},
-                {x: startGridX+1, y: startGridY+1}, {x: startGridX-1, y: startGridY-1},
-                {x: startGridX+1, y: startGridY-1}, {x: startGridX-1, y: startGridY+1}
-            ];
-            for (const snap of snapAdjacents) {
-                const key = `${snap.x},${snap.y}`;
-                if (graph.has(key) && !visited.has(key)) {
-                    queue.push({ x: snap.x, y: snap.y, path: [{ x: snap.x, y: snap.y }] });
-                    visited.add(key);
+            // FALLBACK SNAP: Only for surface workers or if layer snap failed
+            if (!matchingPath || !isCurrentlySubterranean) {
+                const snapAdjacents = [
+                    {x: startGridX+1, y: startGridY}, {x: startGridX-1, y: startGridY}, 
+                    {x: startGridX, y: startGridY+1}, {x: startGridX, y: startGridY-1},
+                    {x: startGridX+1, y: startGridY+1}, {x: startGridX-1, y: startGridY-1},
+                    {x: startGridX+1, y: startGridY-1}, {x: startGridX-1, y: startGridY+1}
+                ];
+                for (const snap of snapAdjacents) {
+                    const key = `${snap.x},${snap.y}`;
+                    if (graph.has(key)) {
+                        const pathsAtSnap = Path.pathGrid.get(key);
+                        const isMotorwayEntrance = pathsAtSnap?.some(p => p.isMotorway && (
+                            (p.points[0].x === snap.x && p.points[0].y === snap.y) ||
+                            (p.points[1].x === snap.x && p.points[1].y === snap.y)
+                        ));
+
+                        if (isCurrentlySubterranean && !isMotorwayEntrance) continue;
+
+                        const stateKey = `${snap.x},${snap.y},${isMotorwayEntrance && isCurrentlySubterranean}`;
+                        if (!visited.has(stateKey)) {
+                            queue.push({ x: snap.x, y: snap.y, isSub: isCurrentlySubterranean, path: [{ x: snap.x, y: snap.y }] });
+                            visited.add(stateKey);
+                        }
+                    }
                 }
             }
         }
 
         while (queue.length > 0) {
-            const { x, y, path } = queue.shift()!;
+            const { x, y, isSub, path } = queue.shift()!;
 
             if (x === targetGridX && y === targetGridY) {
                 return path;
             }
 
             const currentKey = `${x},${y}`;
-            const neighborCoords: { x: number; y: number }[] = [];
-
             const neighborsSet = graph.get(currentKey);
+            
             if (neighborsSet) {
-                neighborsSet.forEach(key => {
-                    const [nx, ny] = key.split(',').map(Number);
-                    neighborCoords.push({ x: nx, y: ny });
+                const pathsAtCurrent = Path.pathGrid.get(currentKey);
+
+                neighborsSet.forEach(neighborKey => {
+                    const [nx, ny] = neighborKey.split(',').map(Number);
+                    
+                    const connectingPath = pathsAtCurrent?.find(p => 
+                        (p.points[0].x === nx && p.points[0].y === ny) ||
+                        (p.points[1].x === nx && p.points[1].y === ny)
+                    );
+
+                    if (!connectingPath) return;
+
+                    const nextIsSub = connectingPath.isMotorway;
+                    const nextStateKey = `${neighborKey},${nextIsSub}`;
+                    
+                    if (!visited.has(nextStateKey)) {
+                        visited.add(nextStateKey);
+                        const newPath = [...path, { x: nx, y: ny }];
+                        queue.push({ x: nx, y: ny, isSub: nextIsSub, path: newPath });
+                    }
                 });
             }
 
             const currentStruct = getStructureAt(x, y);
             if (currentStruct && !(currentStruct instanceof Roundabout)) {
+                if (isSub) continue; 
+
                 const adjacentSnapshot = [
                     { x: x + 1, y }, { x: x - 1, y }, { x, y: y + 1 }, { x, y: y - 1 },
                     { x: x + 1, y: y + 1 }, { x: x + 1, y: y - 1 }, { x: x - 1, y: y + 1 }, { x: x - 1, y: y - 1 }
                 ];
                 for (const adj of adjacentSnapshot) {
                     if (getStructureAt(adj.x, adj.y) === currentStruct) {
-                         if (!neighborCoords.some(n => n.x === adj.x && n.y === adj.y)) {
-                            neighborCoords.push(adj);
+                         const nextStateKey = `${adj.x},${adj.y},false`;
+                         if (!visited.has(nextStateKey)) {
+                            visited.add(nextStateKey);
+                            queue.push({ x: adj.x, y: adj.y, isSub: false, path: [...path, adj] });
                         }
                     }
                 }
-            }
-
-            for (const n of neighborCoords) {
-                const key = `${n.x},${n.y}`;
-                if (visited.has(key)) continue;
-
-                visited.add(key);
-                const newPath = [...path, { x: n.x, y: n.y }];
-                queue.push({ x: n.x, y: n.y, path: newPath });
             }
         }
 
