@@ -18,7 +18,7 @@ export class Worker extends GameObjects.Container {
     private workerState: WorkerState = WorkerState.IDLE;
     private targetBuilding: Building | null = null;
     private homeHouse: House;
-    private speed: number = 140; // Increased base speed for better flow
+    private speed: number = 140; 
     private currentPath: { x: number; y: number }[] = [];
     private lastPathTargetKey: string = "";
 
@@ -28,8 +28,10 @@ export class Worker extends GameObjects.Container {
     private pauseTimer: number = 0;
     public isDespawned: boolean = false;
     private appliedMultiplier: number = 0; 
-    private uniqueId: number = Math.random(); // Unique ID for priority yielding
+    private uniqueId: number = Math.random(); 
     private lastNetworkVersion: number = -1; 
+    private strandedTimer: number = 0;
+    private waitTimer: number = 0;
 
     private headlights: GameObjects.Image;
 
@@ -134,9 +136,6 @@ export class Worker extends GameObjects.Container {
                             this.activeTargetGridY,
                         )
                     ) {
-                        console.log(
-                            "Worker reached specific building pin cell. Posing for 1s...",
-                        );
                         this.workerState = WorkerState.COLLECTING_DEMAND;
                         this.pauseTimer = 1.0;
 
@@ -152,7 +151,6 @@ export class Worker extends GameObjects.Container {
             case WorkerState.COLLECTING_DEMAND:
                 this.pauseTimer -= deltaSeconds;
                 if (this.pauseTimer <= 0) {
-                    console.log("Collection done. Returning home...");
                     this.workerState = WorkerState.RETURNING_TO_HOUSE;
                     this.cargo.setVisible(true);
                     // Set house center as next target
@@ -222,27 +220,27 @@ export class Worker extends GameObjects.Container {
             this.prevGridY = gy;
         }
 
-        // Recalculate path if target changed or we don't have one
-        // Also force recalculation if the global road network has been modified (addition/deletion)
         if (this.lastNetworkVersion !== Path.networkVersion) {
             this.lastPathTargetKey = ""; 
             this.currentPath = []; 
             this.lastNetworkVersion = Path.networkVersion;
         }
 
-        if (
-            this.lastPathTargetKey !== targetKey ||
-            this.currentPath.length === 0
-        ) {
+        if (this.lastPathTargetKey !== targetKey || this.currentPath.length === 0) {
             if (gx !== tX || gy !== tY) {
                 this.currentPath = this.findBFSPath(tX, tY, targetContainer);
                 this.lastPathTargetKey = targetKey;
 
                 if (this.currentPath.length === 0) {
-                    // Stranded! Stop moving and wait for a reconstruction
-                    this.appliedMultiplier = 0;
+                    this.strandedTimer += deltaSeconds;
+                    this.appliedMultiplier = Math.max(0, this.appliedMultiplier - deltaSeconds * 2);
+                    if (this.depth > 1.1) this.setDepth(1.1);
+                    if (this.strandedTimer > 2.0) {
+                        this.despawn();
+                    }
                     return;
                 }
+                this.strandedTimer = 0;
             }
         }
 
@@ -251,21 +249,41 @@ export class Worker extends GameObjects.Container {
             const nextX = (nextNode.x + 0.5) * Building.GRID_SIZE;
             const nextY = (nextNode.y + 0.5) * Building.GRID_SIZE;
 
-            // CRITICAL: Calculate angle based on grid segment, NOT pixel position.
-            // This prevents the feedback loop that causes spinning.
+            const neighborsAtPrev = Path.pathGrid.get(`${this.prevGridX},${this.prevGridY}`);
+            const motorway = neighborsAtPrev?.find(p => 
+                p.isMotorway && 
+                ((p.points[0].x === nextNode.x && p.points[0].y === nextNode.y) ||
+                 (p.points[1].x === nextNode.x && p.points[1].y === nextNode.y))
+            );
+
+            if (motorway) {
+                this.strandedTimer = 0; 
+                this.setDepth(0.2); // SUBTERRANEAN (below buildings/roads)
+                this.setAlpha(0.5); // Ghostly underground look
+                
+                this.moveToPoint(nextX, nextY, deltaSeconds, 1.2); 
+                
+                if (Phaser.Math.Distance.Between(this.x, this.y, nextX, nextY) < 5) {
+                    this.prevGridX = nextNode.x;
+                    this.prevGridY = nextNode.y;
+                    this.currentPath.shift();
+                }
+                return;
+            } else {
+                this.setDepth(10); // surface
+                this.setAlpha(1.0); // fully visible
+            }
+
             const segmentAngle = Phaser.Math.Angle.Between(this.prevGridX, this.prevGridY, nextNode.x, nextNode.y);
             
-            // --- TURN SLOWDOWN LOGIC ---
             let turnMultiplier = 1.0;
             if (this.currentPath.length >= 2) {
                 const nextNode2 = this.currentPath[1];
                 const nextAngle = Phaser.Math.Angle.Between(nextNode.x, nextNode.y, nextNode2.x, nextNode2.y);
                 const turnAngleDiff = Math.abs(Phaser.Math.Angle.ShortestBetween(Phaser.Math.RadToDeg(segmentAngle), Phaser.Math.RadToDeg(nextAngle)));
-                
                 if (turnAngleDiff > 45) {
                     const distToNode = Phaser.Math.Distance.Between(this.x, this.y, nextX, nextY);
                     if (distToNode < 32) {
-                        // Blend down to 0.4 speed as we hit the corner
                         turnMultiplier = Phaser.Math.Linear(0.4, 1.0, Math.min(1, distToNode / 32));
                     }
                 }
@@ -278,12 +296,7 @@ export class Worker extends GameObjects.Container {
             const offsetNextX = nextX + offsetX;
             const offsetNextY = nextY + offsetY;
 
-            const dist = Phaser.Math.Distance.Between(
-                this.x,
-                this.y,
-                offsetNextX,
-                offsetNextY,
-            );
+            const dist = Phaser.Math.Distance.Between(this.x, this.y, offsetNextX, offsetNextY);
             
             if (dist < 4) {
                 this.prevGridX = nextNode.x;
@@ -293,19 +306,14 @@ export class Worker extends GameObjects.Container {
                 this.moveToPoint(offsetNextX, offsetNextY, deltaSeconds, turnMultiplier);
             }
         } else {
-            // Final approach: Move to exact center (No offset to avoid jitter)
             const targetX = (tX + 0.5) * Building.GRID_SIZE;
             const targetY = (tY + 0.5) * Building.GRID_SIZE;
-            
-            const dist = Phaser.Math.Distance.Between(this.x, this.y, targetX, targetY);
-            if (dist > 2) {
-        this.moveToPoint(targetX, targetY, deltaSeconds);
+            if (Phaser.Math.Distance.Between(this.x, this.y, targetX, targetY) > 2) {
+                this.moveToPoint(targetX, targetY, deltaSeconds);
             }
         }
     }
 
-    private waitTimer: number = 0;
- 
     public getHeading(): number {
         return this.headlights.rotation;
     }
@@ -328,17 +336,13 @@ export class Worker extends GameObjects.Container {
         let targetMultiplier = baseMultiplier;
         let isStopped = false;
         
-        // --- HARD GHOSTING (FAIL-SAFE) ---
-        // If stuck or moving very slowly for too long (2s+), ignore collisions to clear jams.
         const isGhosting = this.waitTimer > 2.0; 
         const isFrustrated = this.waitTimer > 1.0;
 
-        // If ghosting, we just move. No collision check.
         if (!isGhosting) {
             const gx = Math.floor(this.x / Building.GRID_SIZE);
             const gy = Math.floor(this.y / Building.GRID_SIZE);
 
-            // Check neighbors in a 3x3 grid (current cell + 8 surrounding)
             for (let dx = -1; dx <= 1; dx++) {
                 for (let dy = -1; dy <= 1; dy++) {
                     const cellKey = `${gx + dx},${gy + dy}`;
@@ -348,6 +352,11 @@ export class Worker extends GameObjects.Container {
                     for (const other of neighbors) {
                         if (other === this || other.isDespawned) continue;
 
+                        // ONLY collide if on the same vertical level
+                        const myLevel = this.depth < 5 ? "subterranean" : "surface";
+                        const otherLevel = other.depth < 5 ? "subterranean" : "surface";
+                        if (myLevel !== otherLevel) continue;
+
                         const otherGx = Math.floor(other.x / Building.GRID_SIZE);
                         const otherGy = Math.floor(other.y / Building.GRID_SIZE);
 
@@ -356,21 +365,17 @@ export class Worker extends GameObjects.Container {
                             const angleToOther = Phaser.Math.Angle.Between(this.x, this.y, other.x, other.y);
                             const diff = Phaser.Math.Angle.ShortestBetween(Phaser.Math.RadToDeg(angleToTarget), Phaser.Math.RadToDeg(angleToOther));
                             
-                            // NARROW CONE (25 deg): Only stop for what's directly in our path
                             if (Math.abs(diff) < 25) {
                                 const otherHeading = other.getHeading();
                                 const headingDiff = Phaser.Math.Angle.ShortestBetween(Phaser.Math.RadToDeg(angleToTarget), Phaser.Math.RadToDeg(otherHeading));
                                 
                                 if (Math.abs(headingDiff) > 135) continue;
 
-                                // DEADLOCK RESOLUTION
                                 const otherAngleToUs = Phaser.Math.Angle.Between(other.x, other.y, this.x, this.y);
                                 const otherDiff = Phaser.Math.Angle.ShortestBetween(Phaser.Math.RadToDeg(otherHeading), Phaser.Math.RadToDeg(otherAngleToUs));
                                 const theyAreLookingAtUs = Math.abs(otherDiff) < 25;
 
                                 if (theyAreLookingAtUs) {
-                                    // PRIORITY 1: Yield to Roundabout
-                                    // If I am NOT in a roundabout but they ARE, I MUST stop.
                                     const IAmInRoundabout = game.structureGrid.get(`${gx},${gy}`) instanceof Roundabout;
                                     const TheyAreInRoundabout = game.structureGrid.get(`${otherGx},${otherGy}`) instanceof Roundabout;
                                     
@@ -380,7 +385,6 @@ export class Worker extends GameObjects.Container {
                                         break;
                                     }
 
-                                    // PRIORITY 2: ID-based deadlock resolution
                                     if (this.uniqueId > (other as any).uniqueId) {
                                         if (!isFrustrated) {
                                             isStopped = true;
@@ -417,15 +421,12 @@ export class Worker extends GameObjects.Container {
             }
         }
 
-        // Decay frustration if we are moving at a healthy speed (>50%)
-        // Increase frustration if we are crawling or stopped
         if (targetMultiplier < 0.5) {
             this.waitTimer += deltaSeconds;
         } else {
             this.waitTimer = Math.max(0, this.waitTimer - deltaSeconds * 2);
         }
 
-        // ACCELERATION/BRAKE PHYSICS:
         if (isStopped) {
             this.appliedMultiplier = Math.max(0, this.appliedMultiplier - deltaSeconds * 3);
         } else if (this.appliedMultiplier < targetMultiplier) {
@@ -433,9 +434,6 @@ export class Worker extends GameObjects.Container {
         } else if (this.appliedMultiplier > targetMultiplier) {
             this.appliedMultiplier = Math.max(targetMultiplier, this.appliedMultiplier - deltaSeconds * 3);
         }
-
-        // --- OLD EXTRA DECAY REMOVED ---
-        // (Removing the line that was unconditionally subtracting from waitTimer)
 
         const distance = Phaser.Math.Distance.Between(this.x, this.y, targetX, targetY);
         const currentSpeed = this.speed * this.appliedMultiplier;
@@ -445,8 +443,9 @@ export class Worker extends GameObjects.Container {
             this.x = targetX;
             this.y = targetY;
         } else {
-            this.x += Math.cos(angleToTarget) * moveDistance;
-            this.y += Math.sin(angleToTarget) * moveDistance;
+            const angleToTargetMove = Phaser.Math.Angle.Between(this.x, this.y, targetX, targetY);
+            this.x += Math.cos(angleToTargetMove) * moveDistance;
+            this.y += Math.sin(angleToTargetMove) * moveDistance;
         }
     }
 
@@ -501,11 +500,38 @@ export class Worker extends GameObjects.Container {
         const visited = new Set<string>();
         visited.add(`${startGridX},${startGridY}`);
 
-        // --- SNAPPING FAIL-SAFE ---
-        // If the current cell isn't in the graph, we might be stranded or off-road.
-        // IMPORTANT: We only snap if we are NOT inside a structure. 
-        // If we ARE in a structure, we must rely on the internal movement logic to reach the entrance.
         if (!graph.has(`${startGridX},${startGridY}`) && !getStructureAt(startGridX, startGridY)) {
+            const isSubterranean = this.depth < 5;
+            const pathsAtCell = Path.pathGrid.get(`${startGridX},${startGridY}`);
+
+            // 1. Layer-Appropriate Snap: Find path matching current traversal level
+            const matchingPath = pathsAtCell?.find(p => p.isMotorway === isSubterranean);
+            
+            if (matchingPath) {
+                // Snap to endpoints of the current segment we are physically on
+                matchingPath.points.forEach(p => {
+                    const key = `${p.x},${p.y}`;
+                    if (graph.has(key) && !visited.has(key)) {
+                        queue.push({ x: p.x, y: p.y, path: [{ x: p.x, y: p.y }] });
+                        visited.add(key);
+                    }
+                });
+            } else if (isSubterranean) {
+                // If we are subterranean but somehow not on a motorway cell (e.g. moved too far)
+                // Try to find ANY nearby motorway endpoint to get back on track
+                const nearbyMotorway = pathsAtCell?.find(p => p.isMotorway);
+                if (nearbyMotorway) {
+                    nearbyMotorway.points.forEach(p => {
+                        const key = `${p.x},${p.y}`;
+                        if (graph.has(key) && !visited.has(key)) {
+                            queue.push({ x: p.x, y: p.y, path: [{ x: p.x, y: p.y }] });
+                            visited.add(key);
+                        }
+                    });
+                }
+            }
+
+            // 2. STANDARD SNAP: 1-cell radius fallback if layer snap failed or for surface workers
             const snapAdjacents = [
                 {x: startGridX+1, y: startGridY}, {x: startGridX-1, y: startGridY}, 
                 {x: startGridX, y: startGridY+1}, {x: startGridX, y: startGridY-1},
@@ -513,9 +539,10 @@ export class Worker extends GameObjects.Container {
                 {x: startGridX+1, y: startGridY-1}, {x: startGridX-1, y: startGridY+1}
             ];
             for (const snap of snapAdjacents) {
-                if (graph.has(`${snap.x},${snap.y}`)) {
+                const key = `${snap.x},${snap.y}`;
+                if (graph.has(key) && !visited.has(key)) {
                     queue.push({ x: snap.x, y: snap.y, path: [{ x: snap.x, y: snap.y }] });
-                    visited.add(`${snap.x},${snap.y}`);
+                    visited.add(key);
                 }
             }
         }
@@ -530,7 +557,6 @@ export class Worker extends GameObjects.Container {
             const currentKey = `${x},${y}`;
             const neighborCoords: { x: number; y: number }[] = [];
 
-            // 1. Add all graph neighbors (Road-to-Road, Road-to-Entrance)
             const neighborsSet = graph.get(currentKey);
             if (neighborsSet) {
                 neighborsSet.forEach(key => {
@@ -539,8 +565,6 @@ export class Worker extends GameObjects.Container {
                 });
             }
 
-            // 2. If inside a structure (Building/House), handle free movement within it.
-            // EXCEPTION: Roundabouts MUST follow the path network (one-way logic).
             const currentStruct = getStructureAt(x, y);
             if (currentStruct && !(currentStruct instanceof Roundabout)) {
                 const adjacentSnapshot = [

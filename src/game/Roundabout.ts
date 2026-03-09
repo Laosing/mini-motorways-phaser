@@ -35,10 +35,10 @@ export class Roundabout extends GameObjects.Container {
         const gx = this.gridX;
         const gy = this.gridY;
 
-        // Clear existing non-fixture paths in the 3x3 area
+        // Clear existing non-fixture paths in the 3x3 area (exclude tunnels)
         for (let ox = 0; ox < Roundabout.SIZE; ox++) {
             for (let oy = 0; oy < Roundabout.SIZE; oy++) {
-                Path.removeAt(gx + ox, gy + oy);
+                Path.removeAt(gx + ox, gy + oy, false);
             }
         }
 
@@ -80,7 +80,7 @@ export class Roundabout extends GameObjects.Container {
     }
 
     public static canPlaceAt(scene: any, gx: number, gy: number): boolean {
-        // Prevent overlapping ANY existing structure (Building, House, or Roundabout)
+        // 1. Prevent overlapping ANY existing structure (Building, House, or Roundabout)
         for (let ox = 0; ox < Roundabout.SIZE; ox++) {
             for (let oy = 0; oy < Roundabout.SIZE; oy++) {
                 if (scene.structureGrid.has(`${gx + ox},${gy + oy}`)) {
@@ -88,6 +88,24 @@ export class Roundabout extends GameObjects.Container {
                 }
             }
         }
+
+        // 2. Prevent placement on Tunnel Entrances (endpoints of motorways)
+        // Check if any of the cells in the 3x3 footprint are a tunnel entrance
+        for (let ox = 0; ox < Roundabout.SIZE; ox++) {
+            for (let oy = 0; oy < Roundabout.SIZE; oy++) {
+                const tx = gx + ox;
+                const ty = gy + oy;
+                const pathsAtCell = Path.pathGrid.get(`${tx},${ty}`);
+                const isTunnelEntrance = pathsAtCell?.some(p => 
+                    p.isMotorway && (
+                        (p.points[0].x === tx && p.points[0].y === ty) ||
+                        (p.points[1].x === tx && p.points[1].y === ty)
+                    )
+                );
+                if (isTunnelEntrance) return false;
+            }
+        }
+
         return true;
     }
 }

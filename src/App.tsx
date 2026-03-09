@@ -59,6 +59,28 @@ function App() {
         }
     };
 
+    const toggleMotorwayMode = () => {
+        if (phaserRef.current) {
+            const scene = phaserRef.current.scene as any;
+            if (scene && scene.scene.key === "Game") {
+                const newMode = placementMode === "MOTORWAY" ? "ROAD" : "MOTORWAY";
+                scene.setPlacementMode(newMode);
+                setPlacementMode(newMode);
+            }
+        }
+    };
+
+    const toggleDemolishMode = () => {
+        if (phaserRef.current) {
+            const scene = phaserRef.current.scene as any;
+            if (scene && scene.scene.key === "Game") {
+                const newMode = placementMode === "DEMOLISH" ? "ROAD" : "DEMOLISH";
+                scene.setPlacementMode(newMode);
+                setPlacementMode(newMode);
+            }
+        }
+    };
+
     return (
         <div id="app">
             <PhaserGame ref={phaserRef} currentActiveScene={currentScene} />
@@ -79,9 +101,35 @@ function App() {
                 <div className="button-group">
                     <button 
                         className={`button ${placementMode === "ROAD" ? "active" : ""}`}
+                        onClick={() => {
+                            if (phaserRef.current) {
+                                const scene = phaserRef.current.scene as any;
+                                if (scene) {
+                                    scene.setPlacementMode("ROAD");
+                                    setPlacementMode("ROAD");
+                                }
+                            }
+                        }}
+                    >
+                        Road
+                    </button>
+                    <button 
+                        className={`button ${placementMode === "ROUNDABOUT" ? "active" : ""}`}
                         onClick={() => toggleRoundaboutMode()}
                     >
-                        {placementMode === "ROUNDABOUT" ? "Cancel Roundabout" : "Add Roundabout"}
+                        Roundabout
+                    </button>
+                    <button 
+                        className={`button ${placementMode === "MOTORWAY" ? "active" : ""}`}
+                        onClick={() => toggleMotorwayMode()}
+                    >
+                        Tunnel
+                    </button>
+                    <button 
+                        className={`button ${placementMode === "DEMOLISH" ? "active" : ""}`}
+                        onClick={() => toggleDemolishMode()}
+                    >
+                        Demolish
                     </button>
                 </div>
             </div>

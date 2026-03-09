@@ -17,11 +17,14 @@ export class Game extends Scene {
     public roundabouts: Roundabout[] = [];
     private workers: Worker[] = [];
     
-    private placementMode: "ROAD" | "ROUNDABOUT" = "ROAD";
+    private placementMode: "ROAD" | "ROUNDABOUT" | "MOTORWAY" | "DEMOLISH" = "ROAD";
     private isDrawing: boolean = false;
     private isDeleting: boolean = false;
+    private adjustingPath: Path | null = null;
     private shadowPath: Phaser.GameObjects.Rectangle | null = null;
     private shadowLine: Phaser.GameObjects.Line | null = null;
+    private shadowMotorway: Phaser.GameObjects.Graphics | null = null;
+    private shadowMotorwayEntrance: Phaser.GameObjects.Graphics | null = null;
     private shadowRoundabout: Phaser.GameObjects.Graphics | null = null;
     private dragStartGrid: { x: number, y: number } | null = null;
     private lastSpawnTime: number = 0; // For worker spawning
@@ -99,6 +102,12 @@ export class Game extends Scene {
             const gy = Math.floor(worldPointer.y / Building.GRID_SIZE);
 
             if (pointer.leftButtonDown()) {
+                if (this.placementMode === "DEMOLISH") {
+                    this.isDeleting = true;
+                    this.removePathAtGrid(gx, gy);
+                    return;
+                }
+                
                 if (this.placementMode === "ROAD") {
                     const isOccupiedByStructure = this.isGridOccupied(gx, gy);
                     const house = this.getHouseAt(gx, gy);
@@ -116,6 +125,12 @@ export class Game extends Scene {
                 } else if (this.placementMode === "ROUNDABOUT") {
                     const offset = Math.floor(Roundabout.SIZE / 2);
                     this.placeRoundabout(gx - offset, gy - offset);
+                } else if (this.placementMode === "MOTORWAY") {
+                    if (!this.isGridOccupied(gx, gy)) { 
+                        // Start tunnel drag only on empty space
+                        this.isDrawing = true;
+                        this.dragStartGrid = { x: gx, y: gy };
+                    }
                 }
             } else if (pointer.rightButtonDown()) {
                 this.isDeleting = true;
@@ -132,9 +147,22 @@ export class Game extends Scene {
             // Always update the shadow highlight
             this.updateShadowPath(gx, gy);
 
-            if (this.isDrawing && this.dragStartGrid) {
+            if (this.isDrawing && (this.dragStartGrid || this.adjustingPath)) {
+                if (this.placementMode === "MOTORWAY") {
+                    if (this.dragStartGrid) {
+                        this.updateShadowPath(gx, gy);
+                    }
+                    return;
+                }
+
+                if (!this.dragStartGrid) return;
                 const dx = gx - this.dragStartGrid.x;
                 const dy = gy - this.dragStartGrid.y;
+
+                if (this.placementMode === "DEMOLISH") {
+                    this.removePathAtGrid(gx, gy);
+                    return;
+                }
 
                 // Stop if we moved too far (more than 1 cell in any direction)
                 if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
@@ -182,17 +210,42 @@ export class Game extends Scene {
                         this.dragStartGrid = { x: gx, y: gy };
                     }
                 }
-            } else if (this.isDeleting) {
+            } else if (this.isDeleting || pointer.rightButtonDown()) {
+                if (pointer.rightButtonDown()) this.isDeleting = true;
                 this.removePathAtGrid(gx, gy);
             }
         });
 
-        this.input.on("pointerup", () => {
+        this.input.on("pointerup", (pointer: Phaser.Input.Pointer) => {
+            if (this.placementMode === "MOTORWAY" && this.isDrawing) {
+                if (this.adjustingPath) {
+                    this.adjustingPath = null;
+                } else if (this.dragStartGrid) {
+                    const worldPointer = this.camera.getWorldPoint(pointer.x, pointer.y);
+                    const gx = Math.floor(worldPointer.x / Building.GRID_SIZE);
+                    const gy = Math.floor(worldPointer.y / Building.GRID_SIZE);
+                    
+                    if (gx !== this.dragStartGrid.x || gy !== this.dragStartGrid.y) {
+                        // Check if BOTH start and end tiles are clear of EVERYTHING (paths and structures)
+                        const startClear = !this.isGridOccupied(this.dragStartGrid.x, this.dragStartGrid.y, true);
+                        const endClear = !this.isGridOccupied(gx, gy, true);
+
+                        if (startClear && endClear) {
+                            // Tunnels are strictly straight now
+                            Path.add(this, this.dragStartGrid.x, this.dragStartGrid.y, gx, gy, false, false, true, null);
+                            this.setPlacementMode("ROAD");
+                        }
+                    }
+                }
+            }
             this.isDrawing = false;
             this.isDeleting = false;
             this.dragStartGrid = null;
+            this.adjustingPath = null;
             if (this.shadowPath) this.shadowPath.setVisible(false);
             if (this.shadowLine) this.shadowLine.setVisible(false);
+            if (this.shadowMotorway) this.shadowMotorway.setVisible(false);
+            if (this.shadowMotorwayEntrance) this.shadowMotorwayEntrance.setVisible(false);
         });
 
         EventBus.emit("current-scene-ready", this);
@@ -237,6 +290,13 @@ export class Game extends Scene {
 
         // ROAD mode
         this.shadowPath.setSize(Building.GRID_SIZE, Building.GRID_SIZE);
+        if (this.placementMode === "DEMOLISH") {
+            this.shadowPath.setFillStyle(0xff0000, 0.4);
+            this.shadowPath.setPosition(gx * Building.GRID_SIZE, gy * Building.GRID_SIZE);
+            this.shadowPath.setVisible(true);
+            return;
+        }
+
         this.shadowPath.setFillStyle(0xdca26f, 0.2);
         this.shadowPath.setPosition(gx * Building.GRID_SIZE, gy * Building.GRID_SIZE);
         const occupied = this.isGridOccupied(gx, gy);
@@ -263,6 +323,72 @@ export class Game extends Scene {
             this.shadowLine.setTo(x1, y1, x2, y2);
             this.shadowLine.setVisible(!occupied);
         }
+
+        // TUNNEL GHOSTING
+        const isSetMotorway = this.placementMode === "MOTORWAY";
+        if (isSetMotorway && this.dragStartGrid) {
+            const startGrid = this.dragStartGrid;
+            if (!this.shadowMotorway) {
+                this.shadowMotorway = this.add.graphics();
+                this.shadowMotorway.setDepth(0.1); // Subterranean depth
+            }
+            if (!this.shadowMotorwayEntrance) {
+                this.shadowMotorwayEntrance = this.add.graphics();
+                this.shadowMotorwayEntrance.setDepth(1.5); // Surface entrance depth
+            }
+            
+            const sm = this.shadowMotorway;
+            const sme = this.shadowMotorwayEntrance;
+            sm.clear();
+            sme.clear();
+            
+            const startOccupied = this.isGridOccupied(startGrid.x, startGrid.y, true);
+            const endOccupied = this.isGridOccupied(gx, gy, true);
+            const tunnelColor = (startOccupied || endOccupied) ? 0xc0392b : 0x34495e; 
+            
+            const x1 = (startGrid.x + 0.5) * Building.GRID_SIZE;
+            const y1 = (startGrid.y + 0.5) * Building.GRID_SIZE;
+            const x2 = (gx + 0.5) * Building.GRID_SIZE;
+            const y2 = (gy + 0.5) * Building.GRID_SIZE;
+            
+            // Draw Dashed Preview Line (Buried)
+            sm.lineStyle(6, tunnelColor, 0.4);
+            const dist = Phaser.Math.Distance.Between(x1, y1, x2, y2);
+            const dashCount = Math.floor(dist / 10);
+            for (let i = 0; i < dashCount; i += 2) {
+                const t1 = i / dashCount;
+                const t2 = (i + 1) / dashCount;
+                sm.lineBetween(
+                    Phaser.Math.Linear(x1, x2, t1),
+                    Phaser.Math.Linear(y1, y2, t1),
+                    Phaser.Math.Linear(x1, x2, t2),
+                    Phaser.Math.Linear(y1, y2, t2)
+                );
+            }
+
+            // Draw Tunnel Entrance Previews (Surface)
+            const drawEntrance = (ex: number, ey: number) => {
+                const rx = (ex + 0.5) * Building.GRID_SIZE;
+                const ry = (ey + 0.5) * Building.GRID_SIZE;
+                const isOccupied = this.isGridOccupied(ex, ey, true);
+                const alpha = isOccupied ? 0.4 : 0.6;
+                sme.fillStyle(0x7f8c8d, alpha);
+                sme.fillRect(rx - 12, ry - 12, 24, 24);
+                sme.lineStyle(2, tunnelColor, alpha + 0.2);
+                sme.strokeRect(rx - 12, ry - 12, 24, 24);
+            };
+            drawEntrance(startGrid.x, startGrid.y);
+            drawEntrance(gx, gy);
+
+            sm.setVisible(true);
+            sme.setVisible(true);
+            
+            if (this.shadowPath) this.shadowPath.setVisible(false);
+            if (this.shadowLine) this.shadowLine.setVisible(false);
+        } else {
+            if (this.shadowMotorway) this.shadowMotorway.setVisible(false);
+            if (this.shadowMotorwayEntrance) this.shadowMotorwayEntrance.setVisible(false);
+        }
     }
 
     private placeRoundabout(gx: number, gy: number) {
@@ -285,10 +411,12 @@ export class Game extends Scene {
         }
     }
 
-    public setPlacementMode(mode: "ROAD" | "ROUNDABOUT") {
+    public setPlacementMode(mode: "ROAD" | "ROUNDABOUT" | "MOTORWAY" | "DEMOLISH") {
         this.placementMode = mode;
         if (this.shadowPath) this.shadowPath.setVisible(false);
         if (this.shadowLine) this.shadowLine.setVisible(false);
+        if (this.shadowMotorway) this.shadowMotorway.setVisible(false);
+        if (this.shadowMotorwayEntrance) this.shadowMotorwayEntrance.setVisible(false);
         if (this.shadowRoundabout) this.shadowRoundabout.setVisible(false);
         this.dragStartGrid = null;
         this.isDrawing = false;
@@ -488,8 +616,6 @@ export class Game extends Scene {
                                 house.lastSpawnTime = time;
                                 spawned = true;
                             } else {
-                                // CRITICAL: If the worker is created but not used, we MUST destroy it.
-                                // Otherwise, it sits in the scene's update list forever.
                                 tempWorker.destroy(); 
                             }
                             
@@ -512,12 +638,10 @@ export class Game extends Scene {
         const colorIndex = Math.floor(this.structureSpawnCounter / 3) % this.colorPalette.length;
         const structureColor = this.colorPalette[colorIndex];
 
-        // 1. House Clustering Logic:
         const sameColorHouses = this.houses.filter(h => h.bodyColor === structureColor);
         const shouldSeedNewNeighborhood = isHouse && sameColorHouses.length > 0 && (sameColorHouses.length % 6 === 5);
 
         if (isHouse && sameColorHouses.length > 0 && !shouldSeedNewNeighborhood) {
-            // Growth phase: preferred houses with FEWER neighbors to grow neighborhoods balancedly
             const sameColorHousesWithCounts = sameColorHouses.map(h => {
                 const neighbors = sameColorHouses.filter(other => 
                     other !== h && Phaser.Math.Distance.Between(h.gridX, h.gridY, other.gridX, other.gridY) <= 2
@@ -525,7 +649,6 @@ export class Game extends Scene {
                 return { house: h, count: neighbors.length };
             });
             
-            // Shuffle then Sort by count ascending (grow sparse areas/new seeds first)
             Phaser.Utils.Array.Shuffle(sameColorHousesWithCounts);
             sameColorHousesWithCounts.sort((a, b) => a.count - b.count);
 
@@ -549,19 +672,16 @@ export class Game extends Scene {
             }
         }
 
-        // 2. Fallback / Seed Selection: Increased search thoroughness (500 trials)
         for (let i = 0; i < 500; i++) {
             const gx = Math.floor(Math.random() * (gridW - w + 1));
             const gy = Math.floor(Math.random() * (gridH - h + 1));
             
-            // If seeding a new neighborhood, prioritize spots FAR from existing same-color houses
             if (shouldSeedNewNeighborhood) {
                 const minDist = sameColorHouses.reduce((min, h) => {
                     const d = Phaser.Math.Distance.Between(gx, gy, h.gridX, h.gridY);
                     return Math.min(min, d);
                 }, Infinity);
                 
-                // Require at least 10 tiles distance for a new neighborhood seed
                 if (minDist < 10 && i < 450) continue; 
             }
 
@@ -577,14 +697,11 @@ export class Game extends Scene {
         const gridH = 24;
         const orientations: ("up" | "down" | "left" | "right")[] = ["up", "down", "left", "right"];
 
-        // Bounds check
         if (gx < 0 || gx + w > gridW || gy < 0 || gy + h > gridH) return false;
 
-        // Try orientations
         Phaser.Utils.Array.Shuffle(orientations);
         for (const entranceDir of orientations) {
             const driveways: { x: number; y: number }[] = [];
-            // Primary driveway
             let d1x = gx, d1y = gy;
             if (entranceDir === "down") d1y = gy + h;
             else if (entranceDir === "up") d1y = gy - 1;
@@ -592,7 +709,6 @@ export class Game extends Scene {
             else if (entranceDir === "right") d1x = gx + w;
             driveways.push({ x: d1x, y: d1y });
 
-            // Secondary driveway for buildings (opposite side)
             if (!isHouse) {
                 const opposites: Record<string, string> = { up: "down", down: "up", left: "right", right: "left" };
                 const oppDir = opposites[entranceDir];
@@ -604,7 +720,6 @@ export class Game extends Scene {
                 driveways.push({ x: d2x, y: d2y });
             }
 
-            // Bounds check for all driveways
             let outOfBounds = false;
             for (const d of driveways) {
                 if (d.x < 0 || d.x >= gridW || d.y < 0 || d.y >= gridH) {
@@ -614,11 +729,9 @@ export class Game extends Scene {
             }
             if (outOfBounds) continue;
 
-            // 1. FOOTPRINT CHECK: Must be clear of OTHER STRUCTURES and PATHS
             let footprintConflict = false;
             for (let ox = 0; ox < w; ox++) {
                 for (let oy = 0; oy < h; oy++) {
-                    // We check for paths here to prevent spawning on user-placed roads
                     if (this.isGridOccupied(gx + ox, gy + oy, true)) {
                         footprintConflict = true; break;
                     }
@@ -627,24 +740,20 @@ export class Game extends Scene {
             }
             if (footprintConflict) continue;
 
-            // 2. DRIVEWAY CHECK: All driveways must be structurally empty (no other buildings)
             let drivewayConflict = false;
             for (const d of driveways) {
-                // We DON'T include paths here because buildings connect TO roads.
                 if (this.isGridOccupied(d.x, d.y, false)) {
                     drivewayConflict = true;
                     break;
                 }
             }
-            if (driveways.length > 0 && drivewayConflict) continue; // Only continue if there are driveways and a conflict
+            if (driveways.length > 0 && drivewayConflict) continue; 
 
-            // 3. (Optional) SEPARATION BUFFER:
-            // Still check distance between separate buildings
             if (!isHouse) {
                 let bufferConflict = false;
                 for (let ox = -1; ox <= w; ox++) {
                     for (let oy = -1; oy <= h; oy++) {
-                        if (ox >= 0 && ox < w && oy >= 0 && oy < h) continue; // Skip footprint
+                        if (ox >= 0 && ox < w && oy >= 0 && oy < h) continue; 
                         if (this.isGridOccupied(gx + ox, gy + oy, false)) { 
                             bufferConflict = true; break;
                         }
@@ -654,7 +763,6 @@ export class Game extends Scene {
                 if (bufferConflict) continue;
             }
 
-            // ALL CLEAR - SPAWN!
             let structure: Building | House;
             if (isHouse) {
                 structure = new House(this, gx, gy, 1, 1, color, entranceDir as any);
@@ -664,26 +772,14 @@ export class Game extends Scene {
                 this.buildings.push(structure as Building);
             }
 
-            // Fill structure grid for fast lookup
             for (let ox = 0; ox < w; ox++) {
                 for (let oy = 0; oy < h; oy++) {
                     this.structureGrid.set(`${gx + ox},${gy + oy}`, structure);
                 }
             }
 
-            console.log(`Spawned ${isHouse ? "House" : "Building"} at ${gx}, ${gy} facing ${entranceDir}`);
             return true;
         }
-
         return false;
-    }
-
-    public toggleSpawning() {
-        this.isSpawningPaused = !this.isSpawningPaused;
-        return this.isSpawningPaused;
-    }
-
-    changeScene() {
-        this.scene.start("GameOver");
     }
 }
