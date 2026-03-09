@@ -1,4 +1,5 @@
 import Phaser, { Scene, GameObjects } from "phaser";
+import { GridUtils } from "./GridUtils";
 
 export interface PathPoint {
     x: number;
@@ -7,8 +8,8 @@ export interface PathPoint {
 
 export class Path {
     public static paths: Path[] = [];
-    public static connectivityGraph: Map<string, Set<string>> = new Map();
-    public static pathGrid: Map<string, Path[]> = new Map();
+    public static connectivityGraph: Map<number, Set<number>> = new Map();
+    public static pathGrid: Map<number, Path[]> = new Map();
     public static networkVersion: number = 0; 
     private static graphics: GameObjects.Graphics | null = null;
 
@@ -20,7 +21,7 @@ export class Path {
     public cachedCurve: Phaser.Curves.QuadraticBezier | null = null;
 
     public static isAt(gridX: number, gridY: number): boolean {
-        return this.pathGrid.has(`${gridX},${gridY}`);
+        return this.pathGrid.has(GridUtils.getKey(gridX, gridY));
     }
 
     public isAt(gridX: number, gridY: number): boolean {
@@ -44,7 +45,7 @@ export class Path {
     }
 
     public static isIntersection(gx: number, gy: number): boolean {
-        const neighbors = this.connectivityGraph.get(`${gx},${gy}`);
+        const neighbors = this.connectivityGraph.get(GridUtils.getKey(gx, gy));
         return (neighbors?.size || 0) >= 3;
     }
 
@@ -97,9 +98,6 @@ export class Path {
         isMotorway: boolean = false,
         controlPoint: PathPoint | null = null
     ) {
-        console.log(
-            `Path.add: (${x1},${y1}) to (${x2},${y2}), isFixture: ${isFixture}, isOneWay: ${isOneWay}, isMotorway: ${isMotorway}`,
-        );
         // Check if this segment already exists
         const exists = this.paths.some(
             (p) =>
@@ -195,8 +193,8 @@ export class Path {
         add: boolean,
         isOneWay: boolean = false
     ) {
-        const k1 = `${x1},${y1}`;
-        const k2 = `${x2},${y2}`;
+        const k1 = GridUtils.getKey(x1, y1);
+        const k2 = GridUtils.getKey(x2, y2);
 
         if (add) {
             if (!this.connectivityGraph.has(k1))
@@ -220,6 +218,7 @@ export class Path {
             }
         }
     }
+
 
     public static render() {
         if (!this.graphics || !this.motorwayGraphics || !this.entranceGraphics) return;
@@ -282,12 +281,12 @@ export class Path {
                     const t = i / stepCount;
                     const gx = Math.floor(p.points[0].x + (p.points[1].x - p.points[0].x) * t + 0.001);
                     const gy = Math.floor(p.points[0].y + (p.points[1].y - p.points[0].y) * t + 0.001);
-                    const key = `${gx},${gy}`;
+                    const key = GridUtils.getKey(gx, gy);
                     if (!Path.pathGrid.has(key)) Path.pathGrid.set(key, []);
                     if (!Path.pathGrid.get(key)!.includes(p)) Path.pathGrid.get(key)!.push(p);
                 }
                 // Ensure the final endpoint cell is also definitely included
-                const endKey = `${p.points[1].x},${p.points[1].y}`;
+                const endKey = GridUtils.getKey(p.points[1].x, p.points[1].y);
                 if (!Path.pathGrid.has(endKey)) Path.pathGrid.set(endKey, []);
                 if (!Path.pathGrid.get(endKey)!.includes(p)) Path.pathGrid.get(endKey)!.push(p);
             } else {
@@ -298,12 +297,12 @@ export class Path {
                     const t = i / stepCount;
                     const gx = Math.floor(p.points[0].x + (p.points[1].x - p.points[0].x) * t + 0.001);
                     const gy = Math.floor(p.points[0].y + (p.points[1].y - p.points[0].y) * t + 0.001);
-                    const key = `${gx},${gy}`;
+                    const key = GridUtils.getKey(gx, gy);
                     if (!this.pathGrid.has(key)) this.pathGrid.set(key, []);
                     if (!this.pathGrid.get(key)!.includes(p)) this.pathGrid.get(key)!.push(p);
                 }
                 // Ensure final endpoint
-                const endKey = `${p.points[1].x},${p.points[1].y}`;
+                const endKey = GridUtils.getKey(p.points[1].x, p.points[1].y);
                 if (!this.pathGrid.has(endKey)) this.pathGrid.set(endKey, []);
                 if (!this.pathGrid.get(endKey)!.includes(p)) this.pathGrid.get(endKey)!.push(p);
                 
@@ -311,8 +310,8 @@ export class Path {
                 const dx = Math.abs(p.points[0].x - p.points[1].x);
                 const dy = Math.abs(p.points[0].y - p.points[1].y);
                 if (dx === 1 && dy === 1) {
-                    const gap1 = `${p.points[0].x},${p.points[1].y}`;
-                    const gap2 = `${p.points[1].x},${p.points[0].y}`;
+                    const gap1 = GridUtils.getKey(p.points[0].x, p.points[1].y);
+                    const gap2 = GridUtils.getKey(p.points[1].x, p.points[0].y);
                     if (!this.pathGrid.has(gap1)) this.pathGrid.set(gap1, []);
                     if (!this.pathGrid.get(gap1)!.includes(p)) this.pathGrid.get(gap1)!.push(p);
                     if (!this.pathGrid.has(gap2)) this.pathGrid.set(gap2, []);
@@ -335,7 +334,7 @@ export class Path {
 
         // 3. Draw Node Cap OUTLINES
         this.connectivityGraph.forEach((_neighbors, key) => {
-            const [gx, gy] = key.split(",").map(Number);
+            const { x: gx, y: gy } = GridUtils.getCoords(key);
             const groundPaths = this.paths.filter(p => !p.isMotorway && ((p.points[0].x === gx && p.points[0].y === gy) || (p.points[1].x === gx && p.points[1].y === gy)));
             if (groundPaths.length > 0) {
                 rg.fillStyle(outlineColor, 1);
@@ -357,13 +356,14 @@ export class Path {
 
         // 5. Draw Node Cap BODIES
         this.connectivityGraph.forEach((_neighbors, key) => {
-            const [gx, gy] = key.split(",").map(Number);
+            const { x: gx, y: gy } = GridUtils.getCoords(key);
             const groundPaths = this.paths.filter(p => !p.isMotorway && ((p.points[0].x === gx && p.points[0].y === gy) || (p.points[1].x === gx && p.points[1].y === gy)));
             if (groundPaths.length > 0) {
                 rg.fillStyle(pathColor, 1);
                 rg.fillCircle((gx + 0.5) * size, (gy + 0.5) * size, 9);
             }
         });
+
 
         // 6. Draw Direction Arrows
         this.paths.forEach(p => {

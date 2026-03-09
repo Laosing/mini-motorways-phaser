@@ -1,5 +1,6 @@
 import { Scene, GameObjects } from "phaser";
 import { Path } from "./Path";
+import { GridUtils } from "./GridUtils";
 
 export interface BuildingConfig {
     x: number;
@@ -18,7 +19,7 @@ interface Pin {
 }
 
 export class Building extends GameObjects.Container {
-    private pins: Map<string, Pin> = new Map();
+    private pins: Map<number, Pin> = new Map();
     public gridX: number;
     public gridY: number;
     public bodyColor: number;
@@ -179,7 +180,7 @@ export class Building extends GameObjects.Container {
         const emptyCells: { lx: number; ly: number }[] = [];
         for (let ly = 0; ly < gridHeight; ly++) {
             for (let lx = 0; lx < gridWidth; lx++) {
-                if (!this.pins.has(`${lx},${ly}`)) {
+                if (!this.pins.has(GridUtils.getKey(lx, ly))) {
                     emptyCells.push({ lx, ly });
                 }
             }
@@ -203,7 +204,7 @@ export class Building extends GameObjects.Container {
         circle.setStrokeStyle(2, 0xffffff);
         this.add(circle).setDepth(5);
 
-        this.pins.set(`${lx},${ly}`, {
+        this.pins.set(GridUtils.getKey(lx, ly), {
             circle,
             gridX: gx,
             gridY: gy,
@@ -224,7 +225,7 @@ export class Building extends GameObjects.Container {
         // Convert absolute back to local to find the pin
         const lx = gx - Math.floor(this.x / Building.GRID_SIZE);
         const ly = gy - Math.floor(this.y / Building.GRID_SIZE);
-        const key = `${lx},${ly}`;
+        const key = GridUtils.getKey(lx, ly);
 
         const pin = this.pins.get(key);
         if (pin) {

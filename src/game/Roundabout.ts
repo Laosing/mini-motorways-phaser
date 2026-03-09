@@ -1,6 +1,7 @@
 import { Scene, GameObjects } from "phaser";
 import { Path } from "./Path";
 import { Building } from "./Building";
+import { GridUtils } from "./GridUtils";
 
 export class Roundabout extends GameObjects.Container {
     public gridX: number;
@@ -83,7 +84,7 @@ export class Roundabout extends GameObjects.Container {
         // 1. Prevent overlapping ANY existing structure (Building, House, or Roundabout)
         for (let ox = 0; ox < Roundabout.SIZE; ox++) {
             for (let oy = 0; oy < Roundabout.SIZE; oy++) {
-                if (scene.structureGrid.has(`${gx + ox},${gy + oy}`)) {
+                if (scene.structureGrid.has(GridUtils.getKey(gx + ox, gy + oy))) {
                     return false;
                 }
             }
@@ -95,7 +96,7 @@ export class Roundabout extends GameObjects.Container {
             for (let oy = 0; oy < Roundabout.SIZE; oy++) {
                 const tx = gx + ox;
                 const ty = gy + oy;
-                const pathsAtCell = Path.pathGrid.get(`${tx},${ty}`);
+                const pathsAtCell = Path.pathGrid.get(GridUtils.getKey(tx, ty));
                 const isTunnelEntrance = pathsAtCell?.some(p => 
                     p.isMotorway && (
                         (p.points[0].x === tx && p.points[0].y === ty) ||

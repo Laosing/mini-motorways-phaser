@@ -5,6 +5,7 @@ import { House } from "../House";
 import { Worker } from "../Worker";
 import { Path } from "../Path";
 import { Roundabout } from "../Roundabout";
+import { GridUtils } from "../GridUtils";
 
 export class Game extends Scene {
     camera: Phaser.Cameras.Scene2D.Camera;
@@ -38,8 +39,9 @@ export class Game extends Scene {
         0x10b981, // Green
         0xa855f7, // Purple
     ];
-    public workerGrid: Map<string, Worker[]> = new Map();
-    public structureGrid: Map<string, Building | House> = new Map();
+    public workerGrid: Map<number, Worker[]> = new Map();
+    public structureGrid: Map<number, Building | House> = new Map();
+
 
     constructor() {
         super("Game");
@@ -399,7 +401,7 @@ export class Game extends Scene {
             // Mark as occupied in structure grid
             for (let ox = 0; ox < Roundabout.SIZE; ox++) {
                 for (let oy = 0; oy < Roundabout.SIZE; oy++) {
-                    this.structureGrid.set(`${gx + ox},${gy + oy}`, rb as any);
+                    this.structureGrid.set(GridUtils.getKey(gx + ox, gy + oy), rb as any);
                 }
             }
             
@@ -434,7 +436,7 @@ export class Game extends Scene {
     }
 
     private isGridOccupied(gx: number, gy: number, includePaths: boolean = false): boolean {
-        const structure = this.structureGrid.get(`${gx},${gy}`);
+        const structure = this.structureGrid.get(GridUtils.getKey(gx, gy));
         
         if (includePaths) {
             return !!structure || Path.isAt(gx, gy);
@@ -502,7 +504,7 @@ export class Game extends Scene {
     }
 
     private removePathAtGrid(gridX: number, gridY: number) {
-        const structure = this.structureGrid.get(`${gridX},${gridY}`);
+        const structure = this.structureGrid.get(GridUtils.getKey(gridX, gridY));
         if (structure instanceof Roundabout) {
             const rb = structure as Roundabout;
             const sx = rb.gridX;
@@ -511,7 +513,7 @@ export class Game extends Scene {
             // 1. Remove from structureGrid (all 3x3 cells)
             for (let ox = 0; ox < Roundabout.SIZE; ox++) {
                 for (let oy = 0; oy < Roundabout.SIZE; oy++) {
-                    this.structureGrid.delete(`${sx + ox},${sy + oy}`);
+                    this.structureGrid.delete(GridUtils.getKey(sx + ox, sy + oy));
                 }
             }
             
@@ -555,7 +557,7 @@ export class Game extends Scene {
         for (const w of this.workers) {
             const gx = Math.floor(w.x / Building.GRID_SIZE);
             const gy = Math.floor(w.y / Building.GRID_SIZE);
-            const key = `${gx},${gy}`;
+            const key = GridUtils.getKey(gx, gy);
             if (!this.workerGrid.has(key)) this.workerGrid.set(key, []);
             this.workerGrid.get(key)!.push(w);
         }
@@ -577,8 +579,8 @@ export class Game extends Scene {
         // Global throttle: 100ms between any worker spawning on the map
         if (time < this.lastSpawnTime + 100) return;
 
-        const assignedPinKeys = new Set(
-            this.workers.map(w => w.getTargetPinKey()).filter(k => k !== null) as string[]
+        const assignedPinKeys = new Set<number>(
+            this.workers.map(w => w.getTargetPinKey()).filter(k => k !== null) as number[]
         );
 
         const houseWorkerCounts = new Map<House, number>();
@@ -591,7 +593,7 @@ export class Game extends Scene {
             if (building.hasDemand) {
                 const pinLocations = building.getAvailablePinLocations();
                 for (const loc of pinLocations) {
-                    const pinKey = `${loc.x},${loc.y}`;
+                    const pinKey = GridUtils.getKey(loc.x, loc.y);
                     
                     if (!assignedPinKeys.has(pinKey)) {
                         for (const house of this.houses) {
@@ -774,7 +776,7 @@ export class Game extends Scene {
 
             for (let ox = 0; ox < w; ox++) {
                 for (let oy = 0; oy < h; oy++) {
-                    this.structureGrid.set(`${gx + ox},${gy + oy}`, structure);
+                    this.structureGrid.set(GridUtils.getKey(gx + ox, gy + oy), structure);
                 }
             }
 

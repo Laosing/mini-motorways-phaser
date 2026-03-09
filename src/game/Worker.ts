@@ -3,6 +3,7 @@ import { Building } from "./Building";
 import { House } from "./House";
 import { Path } from "./Path";
 import { Roundabout } from "./Roundabout";
+import { GridUtils } from "./GridUtils";
 
 export enum WorkerState {
     IDLE,
@@ -13,6 +14,9 @@ export enum WorkerState {
 }
 
 export class Worker extends GameObjects.Container {
+    // Spatial path cache
+    private static pathCache: Map<number, { x: number, y: number }[]> = new Map();
+    private static cacheVersion: number = -1;
     private circle: GameObjects.Image;
     private cargo: GameObjects.Image;
     private workerState: WorkerState = WorkerState.IDLE;
@@ -20,7 +24,7 @@ export class Worker extends GameObjects.Container {
     private homeHouse: House;
     private speed: number = 140; 
     private currentPath: { x: number; y: number }[] = [];
-    private lastPathTargetKey: string = "";
+    private lastPathTargetKey: number = -1;
 
     // The specific grid coordinates we are currently moving toward
     private activeTargetGridX: number = 0;
@@ -193,9 +197,9 @@ export class Worker extends GameObjects.Container {
         return this.homeHouse;
     }
 
-    public getTargetPinKey(): string | null {
+    public getTargetPinKey(): number | null {
         if (this.workerState === WorkerState.GOING_TO_BUILDING || this.workerState === WorkerState.COLLECTING_DEMAND) {
-            return `${this.activeTargetGridX},${this.activeTargetGridY}`;
+            return GridUtils.getKey(this.activeTargetGridX, this.activeTargetGridY);
         }
         return null;
     }
@@ -209,7 +213,7 @@ export class Worker extends GameObjects.Container {
         targetContainer: GameObjects.Container,
         deltaSeconds: number,
     ) {
-        const targetKey = `${tX},${tY}`;
+        const targetKey = GridUtils.getKey(tX, tY);
         const laneOffset = 6; // pixels to stay on the right
 
         const gx = Math.floor(this.x / Building.GRID_SIZE);
@@ -221,7 +225,7 @@ export class Worker extends GameObjects.Container {
         }
 
         if (this.lastNetworkVersion !== Path.networkVersion) {
-            this.lastPathTargetKey = ""; 
+            this.lastPathTargetKey = -1; 
             this.currentPath = []; 
             this.lastNetworkVersion = Path.networkVersion;
         }
@@ -249,7 +253,7 @@ export class Worker extends GameObjects.Container {
             const nextX = (nextNode.x + 0.5) * Building.GRID_SIZE;
             const nextY = (nextNode.y + 0.5) * Building.GRID_SIZE;
 
-            const neighborsAtPrev = Path.pathGrid.get(`${this.prevGridX},${this.prevGridY}`);
+            const neighborsAtPrev = Path.pathGrid.get(GridUtils.getKey(this.prevGridX, this.prevGridY));
             const motorway = neighborsAtPrev?.find(p => 
                 p.isMotorway && 
                 ((p.points[0].x === nextNode.x && p.points[0].y === nextNode.y) ||
@@ -325,7 +329,7 @@ export class Worker extends GameObjects.Container {
         baseMultiplier: number = 1.0
     ) {
         const game = this.scene as any;
-        const grid = game.workerGrid as Map<string, Worker[]>;
+        const grid = game.workerGrid as Map<number, Worker[]>;
         
         const safeDistance = 24; 
         const slowDistance = 50; 
@@ -345,7 +349,7 @@ export class Worker extends GameObjects.Container {
 
             for (let dx = -1; dx <= 1; dx++) {
                 for (let dy = -1; dy <= 1; dy++) {
-                    const cellKey = `${gx + dx},${gy + dy}`;
+                    const cellKey = GridUtils.getKey(gx + dx, gy + dy);
                     const neighbors = grid.get(cellKey);
                     if (!neighbors) continue;
 
@@ -376,8 +380,8 @@ export class Worker extends GameObjects.Container {
                                 const theyAreLookingAtUs = Math.abs(otherDiff) < 25;
 
                                 if (theyAreLookingAtUs) {
-                                    const IAmInRoundabout = game.structureGrid.get(`${gx},${gy}`) instanceof Roundabout;
-                                    const TheyAreInRoundabout = game.structureGrid.get(`${otherGx},${otherGy}`) instanceof Roundabout;
+                                    const IAmInRoundabout = game.structureGrid.get(GridUtils.getKey(gx, gy)) instanceof Roundabout;
+                                    const TheyAreInRoundabout = game.structureGrid.get(GridUtils.getKey(otherGx, otherGy)) instanceof Roundabout;
                                     
                                     if (!IAmInRoundabout && TheyAreInRoundabout) {
                                         isStopped = true;
@@ -483,32 +487,45 @@ export class Worker extends GameObjects.Container {
         const game = this.scene as any;
         const graph = Path.connectivityGraph;
 
-        const getStructureAt = (gx: number, gy: number) => {
-            return game.structureGrid.get(`${gx},${gy}`);
-        };
-
         const startGridX = Math.floor(this.x / Building.GRID_SIZE);
         const startGridY = Math.floor(this.y / Building.GRID_SIZE);
 
         if (startGridX === targetGridX && startGridY === targetGridY) return [];
 
-        const currentCoordKey = `${startGridX},${startGridY}`;
+        // 0. Path Cache Check
+        if (Worker.cacheVersion !== Path.networkVersion) {
+            Worker.pathCache.clear();
+            Worker.cacheVersion = Path.networkVersion;
+        }
+
+        const startKey = GridUtils.getKey(startGridX, startGridY);
+        const targetKey = GridUtils.getKey(targetGridX, targetGridY);
+        
+        // Let's just use string key for cache for now as it's only once per path request
+        const stringCacheKey = `${startKey}_${targetKey}_${this.depth < 5}`;
+        if (Worker.pathCache.has(stringCacheKey as any)) {
+            return [...Worker.pathCache.get(stringCacheKey as any)!];
+        }
+
+
+        const getStructureAt = (gx: number, gy: number) => {
+            return game.structureGrid.get(GridUtils.getKey(gx, gy));
+        };
+
         const isCurrentlySubterranean = this.depth < 5;
         
         // 1. Determine if we are on a valid, layer-appropriate node already
         let onValidNode = !!getStructureAt(startGridX, startGridY);
-        if (!onValidNode && graph.has(currentCoordKey)) {
+        if (!onValidNode && graph.has(startKey)) {
             if (isCurrentlySubterranean) {
-                // To start from a graph node while subterranean, it MUST be a motorway entrance
-                const pathsAtStart = Path.pathGrid.get(currentCoordKey);
+                const pathsAtStart = Path.pathGrid.get(startKey);
                 const isMotorwayEntrance = pathsAtStart?.some(p => p.isMotorway && (
                     (p.points[0].x === startGridX && p.points[0].y === startGridY) ||
                     (p.points[1].x === startGridX && p.points[1].y === startGridY)
                 ));
                 if (isMotorwayEntrance) onValidNode = true;
             } else {
-                // On surface, any graph node is valid for starting
-                if (graph.has(currentCoordKey)) onValidNode = true;
+                if (graph.has(startKey)) onValidNode = true;
             }
         }
 
@@ -518,38 +535,38 @@ export class Worker extends GameObjects.Container {
             isSub: boolean;
             path: { x: number; y: number }[];
         }[] = [];
-        const visited = new Set<string>();
+        const visited = new Set<number>();
+
+        const getVisitedKey = (gx: number, gy: number, sub: boolean) => {
+            return (GridUtils.getKey(gx, gy) << 1) | (sub ? 1 : 0);
+        };
 
         if (onValidNode) {
             queue.push({ x: startGridX, y: startGridY, isSub: isCurrentlySubterranean, path: [] });
-            visited.add(`${startGridX},${startGridY},${isCurrentlySubterranean}`);
+            visited.add(getVisitedKey(startGridX, startGridY, isCurrentlySubterranean));
         } else {
-            // SNAP LOGIC: We are in the middle of a segment
+            // SNAP LOGIC
             let matchingPath: Path | undefined;
-
-            // Layer-Appropriate Snap: Find path matching current traversal level
             for (let dx = -1; dx <= 1 && !matchingPath; dx++) {
                 for (let dy = -1; dy <= 1 && !matchingPath; dy++) {
-                    const paths = Path.pathGrid.get(`${startGridX + dx},${startGridY + dy}`);
+                    const paths = Path.pathGrid.get(GridUtils.getKey(startGridX + dx, startGridY + dy));
                     matchingPath = paths?.find(p => p.isMotorway === isCurrentlySubterranean);
                 }
             }
             
             if (matchingPath) {
-                // Snap to endpoints of the current segment we found
                 matchingPath.points.forEach(p => {
-                    const key = `${p.x},${p.y}`;
-                    if (graph.has(key)) {
-                        const stateKey = `${p.x},${p.y},${matchingPath!.isMotorway}`;
-                        if (!visited.has(stateKey)) {
+                    const pKey = GridUtils.getKey(p.x, p.y);
+                    if (graph.has(pKey)) {
+                        const vKey = getVisitedKey(p.x, p.y, matchingPath!.isMotorway);
+                        if (!visited.has(vKey)) {
                             queue.push({ x: p.x, y: p.y, isSub: matchingPath!.isMotorway, path: [{ x: p.x, y: p.y }] });
-                            visited.add(stateKey);
+                            visited.add(vKey);
                         }
                     }
                 });
             }
 
-            // FALLBACK SNAP: Only for surface workers or if layer snap failed
             if (!matchingPath || !isCurrentlySubterranean) {
                 const snapAdjacents = [
                     {x: startGridX+1, y: startGridY}, {x: startGridX-1, y: startGridY}, 
@@ -558,9 +575,9 @@ export class Worker extends GameObjects.Container {
                     {x: startGridX+1, y: startGridY-1}, {x: startGridX-1, y: startGridY+1}
                 ];
                 for (const snap of snapAdjacents) {
-                    const key = `${snap.x},${snap.y}`;
-                    if (graph.has(key)) {
-                        const pathsAtSnap = Path.pathGrid.get(key);
+                    const sKey = GridUtils.getKey(snap.x, snap.y);
+                    if (graph.has(sKey)) {
+                        const pathsAtSnap = Path.pathGrid.get(sKey);
                         const isMotorwayEntrance = pathsAtSnap?.some(p => p.isMotorway && (
                             (p.points[0].x === snap.x && p.points[0].y === snap.y) ||
                             (p.points[1].x === snap.x && p.points[1].y === snap.y)
@@ -568,10 +585,10 @@ export class Worker extends GameObjects.Container {
 
                         if (isCurrentlySubterranean && !isMotorwayEntrance) continue;
 
-                        const stateKey = `${snap.x},${snap.y},${isMotorwayEntrance && isCurrentlySubterranean}`;
-                        if (!visited.has(stateKey)) {
+                        const vKey = getVisitedKey(snap.x, snap.y, !!(isMotorwayEntrance && isCurrentlySubterranean));
+                        if (!visited.has(vKey)) {
                             queue.push({ x: snap.x, y: snap.y, isSub: isCurrentlySubterranean, path: [{ x: snap.x, y: snap.y }] });
-                            visited.add(stateKey);
+                            visited.add(vKey);
                         }
                     }
                 }
@@ -582,17 +599,18 @@ export class Worker extends GameObjects.Container {
             const { x, y, isSub, path } = queue.shift()!;
 
             if (x === targetGridX && y === targetGridY) {
+                Worker.pathCache.set(stringCacheKey as any, path);
                 return path;
             }
 
-            const currentKey = `${x},${y}`;
+            const currentKey = GridUtils.getKey(x, y);
             const neighborsSet = graph.get(currentKey);
             
             if (neighborsSet) {
                 const pathsAtCurrent = Path.pathGrid.get(currentKey);
 
                 neighborsSet.forEach(neighborKey => {
-                    const [nx, ny] = neighborKey.split(',').map(Number);
+                    const { x: nx, y: ny } = GridUtils.getCoords(neighborKey);
                     
                     const connectingPath = pathsAtCurrent?.find(p => 
                         (p.points[0].x === nx && p.points[0].y === ny) ||
@@ -602,10 +620,10 @@ export class Worker extends GameObjects.Container {
                     if (!connectingPath) return;
 
                     const nextIsSub = connectingPath.isMotorway;
-                    const nextStateKey = `${neighborKey},${nextIsSub}`;
+                    const vKey = getVisitedKey(nx, ny, nextIsSub);
                     
-                    if (!visited.has(nextStateKey)) {
-                        visited.add(nextStateKey);
+                    if (!visited.has(vKey)) {
+                        visited.add(vKey);
                         const newPath = [...path, { x: nx, y: ny }];
                         queue.push({ x: nx, y: ny, isSub: nextIsSub, path: newPath });
                     }
@@ -622,9 +640,9 @@ export class Worker extends GameObjects.Container {
                 ];
                 for (const adj of adjacentSnapshot) {
                     if (getStructureAt(adj.x, adj.y) === currentStruct) {
-                         const nextStateKey = `${adj.x},${adj.y},false`;
-                         if (!visited.has(nextStateKey)) {
-                            visited.add(nextStateKey);
+                         const vKey = getVisitedKey(adj.x, adj.y, false);
+                         if (!visited.has(vKey)) {
+                            visited.add(vKey);
                             queue.push({ x: adj.x, y: adj.y, isSub: false, path: [...path, adj] });
                         }
                     }
@@ -634,4 +652,5 @@ export class Worker extends GameObjects.Container {
 
         return [];
     }
+
 }
