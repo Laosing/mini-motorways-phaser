@@ -23,9 +23,9 @@ export class Roundabout extends GameObjects.Container {
     }
 
     public static draw(
-        graphics: GameObjects.Graphics,
-        pixelSize: number,
-        alpha: number = 1.0,
+        _graphics: GameObjects.Graphics,
+        _pixelSize: number,
+        _alpha: number = 1.0,
     ) {
         // Roundabout visuals are now handled by the one-way paths and arrows
         // in Path.render(), maintaining a cleaner, more integrated look.

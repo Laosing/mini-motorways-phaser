@@ -476,6 +476,7 @@ export class Game extends Scene {
                             // Color match check: house must match building
                             if (house.bodyColor !== building.bodyColor) continue;
 
+                            let spawned = false;
                             const tempWorker = new Worker(this, house);
                             if (tempWorker.canReach(loc.x, loc.y, building)) {
                                 tempWorker.setTargetBuilding(building, loc.x, loc.y);
@@ -485,14 +486,14 @@ export class Game extends Scene {
                                 
                                 this.lastSpawnTime = time;
                                 house.lastSpawnTime = time;
-                                
-                                // We spawned one, move to the next pin (or stop for this frame if we want strict staggering)
-                                // To respect the global 100ms throttle, we must return here.
-                                return; 
+                                spawned = true;
                             } else {
-                                // IMPORTANT: Destroy the temp objects if no path is found
-                                tempWorker.destroy();
+                                // CRITICAL: If the worker is created but not used, we MUST destroy it.
+                                // Otherwise, it sits in the scene's update list forever.
+                                tempWorker.destroy(); 
                             }
+                            
+                            if (spawned) return;
                         }
                     }
                 }
