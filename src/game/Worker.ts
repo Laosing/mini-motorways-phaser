@@ -15,14 +15,15 @@ export enum WorkerState {
 
 export class Worker extends GameObjects.Container {
     // Spatial path cache
-    private static pathCache: Map<number, { x: number, y: number }[]> = new Map();
+    private static pathCache: Map<number, { x: number; y: number }[]> =
+        new Map();
     private static cacheVersion: number = -1;
     private circle: GameObjects.Image;
     private cargo: GameObjects.Image;
     private workerState: WorkerState = WorkerState.IDLE;
     private targetBuilding: Building | null = null;
     private homeHouse: House;
-    private speed: number = 140; 
+    private speed: number = 140;
     private currentPath: { x: number; y: number }[] = [];
     private lastPathTargetKey: number = -1;
 
@@ -31,9 +32,9 @@ export class Worker extends GameObjects.Container {
     private activeTargetGridY: number = 0;
     private pauseTimer: number = 0;
     public isDespawned: boolean = false;
-    private appliedMultiplier: number = 0; 
-    private uniqueId: number = Math.random(); 
-    private lastNetworkVersion: number = -1; 
+    private appliedMultiplier: number = 0;
+    private uniqueId: number = Math.random();
+    private lastNetworkVersion: number = -1;
     private strandedTimer: number = 0;
     private waitTimer: number = 0;
 
@@ -101,12 +102,16 @@ export class Worker extends GameObjects.Container {
         const coneAngle = Phaser.Math.DegToRad(35);
         headG.fillStyle(0xffffff, 0.15);
         headG.beginPath();
-        headG.moveTo(0, slowDistance); 
-        headG.arc(0, slowDistance, slowDistance, -coneAngle/2, coneAngle/2);
+        headG.moveTo(0, slowDistance);
+        headG.arc(0, slowDistance, slowDistance, -coneAngle / 2, coneAngle / 2);
         headG.closePath();
         headG.fillPath();
-        
-        headG.generateTexture("worker-headlights", slowDistance, slowDistance * 2);
+
+        headG.generateTexture(
+            "worker-headlights",
+            slowDistance,
+            slowDistance * 2,
+        );
         headG.destroy();
 
         this.texturesGenerated = true;
@@ -200,8 +205,14 @@ export class Worker extends GameObjects.Container {
     }
 
     public getTargetPinKey(): number | null {
-        if (this.workerState === WorkerState.GOING_TO_BUILDING || this.workerState === WorkerState.COLLECTING_DEMAND) {
-            return GridUtils.getKey(this.activeTargetGridX, this.activeTargetGridY);
+        if (
+            this.workerState === WorkerState.GOING_TO_BUILDING ||
+            this.workerState === WorkerState.COLLECTING_DEMAND
+        ) {
+            return GridUtils.getKey(
+                this.activeTargetGridX,
+                this.activeTargetGridY,
+            );
         }
         return null;
     }
@@ -227,21 +238,27 @@ export class Worker extends GameObjects.Container {
         }
 
         if (this.lastNetworkVersion !== Path.networkVersion) {
-            this.lastPathTargetKey = -1; 
-            this.currentPath = []; 
+            this.lastPathTargetKey = -1;
+            this.currentPath = [];
             this.lastNetworkVersion = Path.networkVersion;
         }
 
-        if (this.lastPathTargetKey !== targetKey || this.currentPath.length === 0) {
+        if (
+            this.lastPathTargetKey !== targetKey ||
+            this.currentPath.length === 0
+        ) {
             if (gx !== tX || gy !== tY) {
-                this.currentPath = this.findBFSPath(tX, tY, targetContainer);
+                this.currentPath = this.findPath(tX, tY, targetContainer);
                 this.lastPathTargetKey = targetKey;
 
                 if (this.currentPath.length === 0) {
                     this.strandedTimer += deltaSeconds;
-                    this.appliedMultiplier = Math.max(0, this.appliedMultiplier - deltaSeconds * 2);
+                    this.appliedMultiplier = Math.max(
+                        0,
+                        this.appliedMultiplier - deltaSeconds * 2,
+                    );
                     if (this.depth > 1.1) this.setDepth(1.1);
-                    if (this.strandedTimer > 2.0) {
+                    if (this.strandedTimer > 5.0) {
                         this.despawn();
                     }
                     return;
@@ -255,21 +272,29 @@ export class Worker extends GameObjects.Container {
             const nextX = (nextNode.x + 0.5) * Building.GRID_SIZE;
             const nextY = (nextNode.y + 0.5) * Building.GRID_SIZE;
 
-            const neighborsAtPrev = Path.pathGrid.get(GridUtils.getKey(this.prevGridX, this.prevGridY));
-            const motorway = neighborsAtPrev?.find(p => 
-                p.isMotorway && 
-                ((p.points[0].x === nextNode.x && p.points[0].y === nextNode.y) ||
-                 (p.points[1].x === nextNode.x && p.points[1].y === nextNode.y))
+            const neighborsAtPrev = Path.pathGrid.get(
+                GridUtils.getKey(this.prevGridX, this.prevGridY),
+            );
+            const motorway = neighborsAtPrev?.find(
+                (p) =>
+                    p.isMotorway &&
+                    ((p.points[0].x === nextNode.x &&
+                        p.points[0].y === nextNode.y) ||
+                        (p.points[1].x === nextNode.x &&
+                            p.points[1].y === nextNode.y)),
             );
 
             if (motorway) {
-                this.strandedTimer = 0; 
+                this.strandedTimer = 0;
                 this.setDepth(0.2); // SUBTERRANEAN (below buildings/roads)
                 this.setAlpha(0.5); // Ghostly underground look
-                
-                this.moveToPoint(nextX, nextY, deltaSeconds, 1.2); 
-                
-                if (Phaser.Math.Distance.Between(this.x, this.y, nextX, nextY) < 5) {
+
+                this.moveToPoint(nextX, nextY, deltaSeconds, 1.2);
+
+                if (
+                    Phaser.Math.Distance.Between(this.x, this.y, nextX, nextY) <
+                    5
+                ) {
                     this.prevGridX = nextNode.x;
                     this.prevGridY = nextNode.y;
                     this.currentPath.shift();
@@ -280,17 +305,41 @@ export class Worker extends GameObjects.Container {
                 this.setAlpha(1.0); // fully visible
             }
 
-            const segmentAngle = Phaser.Math.Angle.Between(this.prevGridX, this.prevGridY, nextNode.x, nextNode.y);
-            
+            const segmentAngle = Phaser.Math.Angle.Between(
+                this.prevGridX,
+                this.prevGridY,
+                nextNode.x,
+                nextNode.y,
+            );
+
             let turnMultiplier = 1.0;
             if (this.currentPath.length >= 2) {
                 const nextNode2 = this.currentPath[1];
-                const nextAngle = Phaser.Math.Angle.Between(nextNode.x, nextNode.y, nextNode2.x, nextNode2.y);
-                const turnAngleDiff = Math.abs(Phaser.Math.Angle.ShortestBetween(Phaser.Math.RadToDeg(segmentAngle), Phaser.Math.RadToDeg(nextAngle)));
+                const nextAngle = Phaser.Math.Angle.Between(
+                    nextNode.x,
+                    nextNode.y,
+                    nextNode2.x,
+                    nextNode2.y,
+                );
+                const turnAngleDiff = Math.abs(
+                    Phaser.Math.Angle.ShortestBetween(
+                        Phaser.Math.RadToDeg(segmentAngle),
+                        Phaser.Math.RadToDeg(nextAngle),
+                    ),
+                );
                 if (turnAngleDiff > 45) {
-                    const distToNode = Phaser.Math.Distance.Between(this.x, this.y, nextX, nextY);
+                    const distToNode = Phaser.Math.Distance.Between(
+                        this.x,
+                        this.y,
+                        nextX,
+                        nextY,
+                    );
                     if (distToNode < 32) {
-                        turnMultiplier = Phaser.Math.Linear(0.4, 1.0, Math.min(1, distToNode / 32));
+                        turnMultiplier = Phaser.Math.Linear(
+                            0.4,
+                            1.0,
+                            Math.min(1, distToNode / 32),
+                        );
                     }
                 }
             }
@@ -302,14 +351,24 @@ export class Worker extends GameObjects.Container {
             const offsetNextX = nextX + offsetX;
             const offsetNextY = nextY + offsetY;
 
-            const dist = Phaser.Math.Distance.Between(this.x, this.y, offsetNextX, offsetNextY);
-            
+            const dist = Phaser.Math.Distance.Between(
+                this.x,
+                this.y,
+                offsetNextX,
+                offsetNextY,
+            );
+
             if (dist < 4) {
                 this.prevGridX = nextNode.x;
                 this.prevGridY = nextNode.y;
                 this.currentPath.shift();
             } else {
-                this.moveToPoint(offsetNextX, offsetNextY, deltaSeconds, turnMultiplier);
+                this.moveToPoint(
+                    offsetNextX,
+                    offsetNextY,
+                    deltaSeconds,
+                    turnMultiplier,
+                );
             }
         } else {
             // Arrived at the final grid cell of the path
@@ -317,7 +376,10 @@ export class Worker extends GameObjects.Container {
             this.setAlpha(1.0);
             const targetX = (tX + 0.5) * Building.GRID_SIZE;
             const targetY = (tY + 0.5) * Building.GRID_SIZE;
-            if (Phaser.Math.Distance.Between(this.x, this.y, targetX, targetY) > 2) {
+            if (
+                Phaser.Math.Distance.Between(this.x, this.y, targetX, targetY) >
+                2
+            ) {
                 this.moveToPoint(targetX, targetY, deltaSeconds);
             }
         }
@@ -331,21 +393,26 @@ export class Worker extends GameObjects.Container {
         targetX: number,
         targetY: number,
         deltaSeconds: number,
-        baseMultiplier: number = 1.0
+        baseMultiplier: number = 1.0,
     ) {
         const game = this.scene as any;
         const grid = game.workerGrid as Map<number, Worker[]>;
-        
-        const safeDistance = 24; 
-        const slowDistance = 50; 
-        const angleToTarget = Phaser.Math.Angle.Between(this.x, this.y, targetX, targetY);
+
+        const safeDistance = 24;
+        const slowDistance = 50;
+        const angleToTarget = Phaser.Math.Angle.Between(
+            this.x,
+            this.y,
+            targetX,
+            targetY,
+        );
 
         this.headlights.setRotation(angleToTarget);
 
         let targetMultiplier = baseMultiplier;
         let isStopped = false;
-        
-        const isGhosting = this.waitTimer > 2.0; 
+
+        const isGhosting = this.waitTimer > 2.0;
         const isFrustrated = this.waitTimer > 1.0;
 
         if (!isGhosting && this.depth >= 5) {
@@ -362,49 +429,100 @@ export class Worker extends GameObjects.Container {
                         if (other === this || other.isDespawned) continue;
 
                         // ONLY collide if on the same vertical level
-                        const myLevel = this.depth < 5 ? "subterranean" : "surface";
-                        const otherLevel = other.depth < 5 ? "subterranean" : "surface";
+                        const myLevel =
+                            this.depth < 5 ? "subterranean" : "surface";
+                        const otherLevel =
+                            other.depth < 5 ? "subterranean" : "surface";
                         if (myLevel !== otherLevel) continue;
 
-                        const otherGx = Math.floor(other.x / Building.GRID_SIZE);
-                        const otherGy = Math.floor(other.y / Building.GRID_SIZE);
+                        const otherGx = Math.floor(
+                            other.x / Building.GRID_SIZE,
+                        );
+                        const otherGy = Math.floor(
+                            other.y / Building.GRID_SIZE,
+                        );
 
-                        const dist = Phaser.Math.Distance.Between(this.x, this.y, other.x, other.y);
+                        const dist = Phaser.Math.Distance.Between(
+                            this.x,
+                            this.y,
+                            other.x,
+                            other.y,
+                        );
                         if (dist < slowDistance) {
-                            const angleToOther = Phaser.Math.Angle.Between(this.x, this.y, other.x, other.y);
-                            const diff = Phaser.Math.Angle.ShortestBetween(Phaser.Math.RadToDeg(angleToTarget), Phaser.Math.RadToDeg(angleToOther));
-                            
+                            const angleToOther = Phaser.Math.Angle.Between(
+                                this.x,
+                                this.y,
+                                other.x,
+                                other.y,
+                            );
+                            const diff = Phaser.Math.Angle.ShortestBetween(
+                                Phaser.Math.RadToDeg(angleToTarget),
+                                Phaser.Math.RadToDeg(angleToOther),
+                            );
+
                             if (Math.abs(diff) < 25) {
                                 const otherHeading = other.getHeading();
-                                const headingDiff = Phaser.Math.Angle.ShortestBetween(Phaser.Math.RadToDeg(angleToTarget), Phaser.Math.RadToDeg(otherHeading));
-                                
+                                const headingDiff =
+                                    Phaser.Math.Angle.ShortestBetween(
+                                        Phaser.Math.RadToDeg(angleToTarget),
+                                        Phaser.Math.RadToDeg(otherHeading),
+                                    );
+
                                 if (Math.abs(headingDiff) > 135) continue;
 
-                                const otherAngleToUs = Phaser.Math.Angle.Between(other.x, other.y, this.x, this.y);
-                                const otherDiff = Phaser.Math.Angle.ShortestBetween(Phaser.Math.RadToDeg(otherHeading), Phaser.Math.RadToDeg(otherAngleToUs));
-                                const theyAreLookingAtUs = Math.abs(otherDiff) < 25;
+                                const otherAngleToUs =
+                                    Phaser.Math.Angle.Between(
+                                        other.x,
+                                        other.y,
+                                        this.x,
+                                        this.y,
+                                    );
+                                const otherDiff =
+                                    Phaser.Math.Angle.ShortestBetween(
+                                        Phaser.Math.RadToDeg(otherHeading),
+                                        Phaser.Math.RadToDeg(otherAngleToUs),
+                                    );
+                                const theyAreLookingAtUs =
+                                    Math.abs(otherDiff) < 25;
 
                                 if (theyAreLookingAtUs) {
-                                    const IAmInRoundabout = game.structureGrid.get(GridUtils.getKey(gx, gy)) instanceof Roundabout;
-                                    const TheyAreInRoundabout = game.structureGrid.get(GridUtils.getKey(otherGx, otherGy)) instanceof Roundabout;
-                                    
-                                    if (!IAmInRoundabout && TheyAreInRoundabout) {
+                                    const IAmInRoundabout =
+                                        game.structureGrid.get(
+                                            GridUtils.getKey(gx, gy),
+                                        ) instanceof Roundabout;
+                                    const TheyAreInRoundabout =
+                                        game.structureGrid.get(
+                                            GridUtils.getKey(otherGx, otherGy),
+                                        ) instanceof Roundabout;
+
+                                    if (
+                                        !IAmInRoundabout &&
+                                        TheyAreInRoundabout
+                                    ) {
                                         isStopped = true;
                                         targetMultiplier = 0;
                                         break;
                                     }
 
-                                    if (this.uniqueId > (other as any).uniqueId) {
+                                    if (
+                                        this.uniqueId > (other as any).uniqueId
+                                    ) {
                                         if (!isFrustrated) {
                                             isStopped = true;
                                             targetMultiplier = 0;
                                             break;
                                         } else {
-                                            targetMultiplier = Math.min(targetMultiplier, 0.4);
+                                            targetMultiplier = Math.min(
+                                                targetMultiplier,
+                                                0.4,
+                                            );
                                             continue;
                                         }
                                     } else {
-                                        targetMultiplier = Math.min(targetMultiplier, 1.2); 
+                                        targetMultiplier = Math.min(
+                                            targetMultiplier,
+                                            1.2,
+                                        );
                                         continue;
                                     }
                                 }
@@ -415,11 +533,19 @@ export class Worker extends GameObjects.Container {
                                         targetMultiplier = 0;
                                         break;
                                     } else {
-                                        targetMultiplier = Math.min(targetMultiplier, 0.3);
+                                        targetMultiplier = Math.min(
+                                            targetMultiplier,
+                                            0.3,
+                                        );
                                     }
                                 } else {
-                                    const brakeFactor = (dist - safeDistance) / (slowDistance - safeDistance);
-                                    targetMultiplier = Math.min(targetMultiplier, Math.max(0, brakeFactor));
+                                    const brakeFactor =
+                                        (dist - safeDistance) /
+                                        (slowDistance - safeDistance);
+                                    targetMultiplier = Math.min(
+                                        targetMultiplier,
+                                        Math.max(0, brakeFactor),
+                                    );
                                 }
                             }
                         }
@@ -437,14 +563,28 @@ export class Worker extends GameObjects.Container {
         }
 
         if (isStopped) {
-            this.appliedMultiplier = Math.max(0, this.appliedMultiplier - deltaSeconds * 3);
+            this.appliedMultiplier = Math.max(
+                0,
+                this.appliedMultiplier - deltaSeconds * 3,
+            );
         } else if (this.appliedMultiplier < targetMultiplier) {
-            this.appliedMultiplier = Math.min(targetMultiplier, this.appliedMultiplier + deltaSeconds * 1.5);
+            this.appliedMultiplier = Math.min(
+                targetMultiplier,
+                this.appliedMultiplier + deltaSeconds * 1.5,
+            );
         } else if (this.appliedMultiplier > targetMultiplier) {
-            this.appliedMultiplier = Math.max(targetMultiplier, this.appliedMultiplier - deltaSeconds * 3);
+            this.appliedMultiplier = Math.max(
+                targetMultiplier,
+                this.appliedMultiplier - deltaSeconds * 3,
+            );
         }
 
-        const distance = Phaser.Math.Distance.Between(this.x, this.y, targetX, targetY);
+        const distance = Phaser.Math.Distance.Between(
+            this.x,
+            this.y,
+            targetX,
+            targetY,
+        );
         const currentSpeed = this.speed * this.appliedMultiplier;
         const moveDistance = currentSpeed * deltaSeconds;
 
@@ -452,7 +592,12 @@ export class Worker extends GameObjects.Container {
             this.x = targetX;
             this.y = targetY;
         } else {
-            const angleToTargetMove = Phaser.Math.Angle.Between(this.x, this.y, targetX, targetY);
+            const angleToTargetMove = Phaser.Math.Angle.Between(
+                this.x,
+                this.y,
+                targetX,
+                targetY,
+            );
             this.x += Math.cos(angleToTargetMove) * moveDistance;
             this.y += Math.sin(angleToTargetMove) * moveDistance;
         }
@@ -469,22 +614,15 @@ export class Worker extends GameObjects.Container {
     }
 
     public canReach(
-        gx: number,
-        gy: number,
+        targetX: number,
+        targetY: number,
         container: GameObjects.Container,
     ): boolean {
-        const startGridX = Math.floor(this.x / Building.GRID_SIZE);
-        const startGridY = Math.floor(this.y / Building.GRID_SIZE);
-
-        if (startGridX === gx && startGridY === gy) {
-            return true;
-        }
-
-        const path = this.findBFSPath(gx, gy, container);
+        const path = this.findPath(targetX, targetY, container);
         return path.length > 0;
     }
 
-    private findBFSPath(
+    private findPath(
         targetGridX: number,
         targetGridY: number,
         _targetContainer: GameObjects.Container,
@@ -505,157 +643,146 @@ export class Worker extends GameObjects.Container {
 
         const startKey = GridUtils.getKey(startGridX, startGridY);
         const targetKey = GridUtils.getKey(targetGridX, targetGridY);
-        
-        // Let's just use string key for cache for now as it's only once per path request
-        const stringCacheKey = `${startKey}_${targetKey}_${this.depth < 5}`;
-        if (Worker.pathCache.has(stringCacheKey as any)) {
-            return [...Worker.pathCache.get(stringCacheKey as any)!];
-        }
 
+        const cacheKey = `${startKey}_${targetKey}_${this.depth < 5}`;
+        if (Worker.pathCache.has(cacheKey as any)) {
+            return [...Worker.pathCache.get(cacheKey as any)!];
+        }
 
         const getStructureAt = (gx: number, gy: number) => {
             return game.structureGrid.get(GridUtils.getKey(gx, gy));
         };
 
         const isCurrentlySubterranean = this.depth < 5;
-        
-        // 1. Determine if we are on a valid, layer-appropriate node already
-        let onValidNode = !!getStructureAt(startGridX, startGridY);
-        if (!onValidNode && graph.has(startKey)) {
-            if (isCurrentlySubterranean) {
-                const pathsAtStart = Path.pathGrid.get(startKey);
-                const isMotorwayEntrance = pathsAtStart?.some(p => p.isMotorway && (
-                    (p.points[0].x === startGridX && p.points[0].y === startGridY) ||
-                    (p.points[1].x === startGridX && p.points[1].y === startGridY)
-                ));
-                if (isMotorwayEntrance) onValidNode = true;
-            } else {
-                if (graph.has(startKey)) onValidNode = true;
-            }
-        }
 
-        const queue: {
-            x: number;
-            y: number;
-            isSub: boolean;
-            path: { x: number; y: number }[];
-        }[] = [];
-        const visited = new Set<number>();
+        // A* Pathfinding
+        // queue stores { x, y, isSub, cost, priority }
+        const queue: { x: number; y: number; isSub: boolean; priority: number }[] = [];
+        const parents = new Map<number, number | null>();
+        const costs = new Map<number, number>();
 
         const getVisitedKey = (gx: number, gy: number, sub: boolean) => {
-            return (GridUtils.getKey(gx, gy) << 1) | (sub ? 1 : 0);
+            return ((gx & 0x3ff) << 11) | ((gy & 0x3ff) << 1) | (sub ? 1 : 0);
         };
 
+        const addToQueue = (
+            qx: number,
+            qy: number,
+            qSub: boolean,
+            pKey: number | null,
+            stepCost: number
+        ) => {
+            const vKey = getVisitedKey(qx, qy, qSub);
+            const newCost = (pKey !== null ? (costs.get(pKey) || 0) : 0) + stepCost;
+
+            if (!costs.has(vKey) || newCost < (costs.get(vKey) || 0)) {
+                costs.set(vKey, newCost);
+                parents.set(vKey, pKey);
+                
+                // Heuristic: Manhattan distance to target
+                const h = Math.abs(qx - targetGridX) + Math.abs(qy - targetGridY);
+                const priority = newCost + h;
+                
+                queue.push({ x: qx, y: qy, isSub: qSub, priority });
+                // Keep queue sorted by priority (simplified A*)
+                queue.sort((a, b) => a.priority - b.priority);
+                return true;
+            }
+            return false;
+        };
+
+        // ROBUST START DISCOVERY
+        let onValidNode = !!getStructureAt(startGridX, startGridY) || graph.has(startKey);
         if (onValidNode) {
-            queue.push({ x: startGridX, y: startGridY, isSub: isCurrentlySubterranean, path: [] });
-            visited.add(getVisitedKey(startGridX, startGridY, isCurrentlySubterranean));
+            addToQueue(startGridX, startGridY, isCurrentlySubterranean, null, 0);
         } else {
-            // SNAP LOGIC
-            let matchingPath: Path | undefined;
-            for (let dx = -1; dx <= 1 && !matchingPath; dx++) {
-                for (let dy = -1; dy <= 1 && !matchingPath; dy++) {
-                    const paths = Path.pathGrid.get(GridUtils.getKey(startGridX + dx, startGridY + dy));
-                    matchingPath = paths?.find(p => p.isMotorway === isCurrentlySubterranean);
-                }
-            }
-            
-            if (matchingPath) {
-                matchingPath.points.forEach(p => {
-                    const pKey = GridUtils.getKey(p.x, p.y);
-                    if (graph.has(pKey)) {
-                        const vKey = getVisitedKey(p.x, p.y, matchingPath!.isMotorway);
-                        if (!visited.has(vKey)) {
-                            queue.push({ x: p.x, y: p.y, isSub: matchingPath!.isMotorway, path: [{ x: p.x, y: p.y }] });
-                            visited.add(vKey);
-                        }
-                    }
-                });
-            }
-
-            if (!matchingPath || !isCurrentlySubterranean) {
-                const snapAdjacents = [
-                    {x: startGridX+1, y: startGridY}, {x: startGridX-1, y: startGridY}, 
-                    {x: startGridX, y: startGridY+1}, {x: startGridX, y: startGridY-1},
-                    {x: startGridX+1, y: startGridY+1}, {x: startGridX-1, y: startGridY-1},
-                    {x: startGridX+1, y: startGridY-1}, {x: startGridX-1, y: startGridY+1}
-                ];
-                for (const snap of snapAdjacents) {
-                    const sKey = GridUtils.getKey(snap.x, snap.y);
-                    if (graph.has(sKey)) {
-                        const pathsAtSnap = Path.pathGrid.get(sKey);
-                        const isMotorwayEntrance = pathsAtSnap?.some(p => p.isMotorway && (
-                            (p.points[0].x === snap.x && p.points[0].y === snap.y) ||
-                            (p.points[1].x === snap.x && p.points[1].y === snap.y)
-                        ));
-
-                        if (isCurrentlySubterranean && !isMotorwayEntrance) continue;
-
-                        const vKey = getVisitedKey(snap.x, snap.y, !!(isMotorwayEntrance && isCurrentlySubterranean));
-                        if (!visited.has(vKey)) {
-                            queue.push({ x: snap.x, y: snap.y, isSub: isCurrentlySubterranean, path: [{ x: snap.x, y: snap.y }] });
-                            visited.add(vKey);
+            // Expanded Snap Logic (Search 5x5 area)
+            let snapFound = false;
+            for (let r = 0; r <= 2 && !snapFound; r++) {
+                for (let dx = -r; dx <= r && !snapFound; dx++) {
+                    for (let dy = -r; dy <= r && !snapFound; dy++) {
+                        const nx = startGridX + dx;
+                        const ny = startGridY + dy;
+                        const paths = Path.pathGrid.get(GridUtils.getKey(nx, ny));
+                        const matchingPath = paths?.find(p => p.isMotorway === isCurrentlySubterranean);
+                        
+                        if (matchingPath) {
+                            // If we're on a path, we can reach its nodes
+                            // Note: One-way roads are handled below during neighbor expansion
+                            matchingPath.points.forEach(pt => {
+                                if (graph.has(GridUtils.getKey(pt.x, pt.y))) {
+                                    addToQueue(pt.x, pt.y, matchingPath.isMotorway, null, r);
+                                }
+                            });
+                            snapFound = true;
                         }
                     }
                 }
             }
         }
 
+        let foundVKey = -1;
         while (queue.length > 0) {
-            const { x, y, isSub, path } = queue.shift()!;
+            const { x, y, isSub } = queue.shift()!;
+            const currentVKey = getVisitedKey(x, y, isSub);
 
             if (x === targetGridX && y === targetGridY) {
-                Worker.pathCache.set(stringCacheKey as any, path);
-                return path;
+                foundVKey = currentVKey;
+                break;
             }
 
             const currentKey = GridUtils.getKey(x, y);
-            const neighborsSet = graph.get(currentKey);
-            
-            if (neighborsSet) {
-                const pathsAtCurrent = Path.pathGrid.get(currentKey);
+            const neighbors = graph.get(currentKey);
 
-                neighborsSet.forEach(neighborKey => {
+            if (neighbors) {
+                const pathsAtCurrent = Path.pathGrid.get(currentKey);
+                neighbors.forEach(neighborKey => {
                     const { x: nx, y: ny } = GridUtils.getCoords(neighborKey);
-                    
                     const connectingPath = pathsAtCurrent?.find(p => 
                         (p.points[0].x === nx && p.points[0].y === ny) ||
                         (p.points[1].x === nx && p.points[1].y === ny)
                     );
 
-                    if (!connectingPath) return;
-
-                    const nextIsSub = connectingPath.isMotorway;
-                    const vKey = getVisitedKey(nx, ny, nextIsSub);
-                    
-                    if (!visited.has(vKey)) {
-                        visited.add(vKey);
-                        const newPath = [...path, { x: nx, y: ny }];
-                        queue.push({ x: nx, y: ny, isSub: nextIsSub, path: newPath });
+                    if (connectingPath) {
+                        // Check one-way directionality
+                        if (connectingPath.isOneWay) {
+                            const isTowardsEnd = connectingPath.points[1].x === nx && connectingPath.points[1].y === ny;
+                            if (!isTowardsEnd) return; // Can't go backwards
+                        }
+                        
+                        const dist = Math.sqrt(Math.pow(nx-x, 2) + Math.pow(ny-y, 2));
+                        addToQueue(nx, ny, connectingPath.isMotorway, currentVKey, dist);
                     }
                 });
             }
 
-            const currentStruct = getStructureAt(x, y);
-            if (currentStruct && !(currentStruct instanceof Roundabout)) {
-                if (isSub) continue; 
-
-                const adjacentSnapshot = [
-                    { x: x + 1, y }, { x: x - 1, y }, { x, y: y + 1 }, { x, y: y - 1 },
-                    { x: x + 1, y: y + 1 }, { x: x + 1, y: y - 1 }, { x: x - 1, y: y + 1 }, { x: x - 1, y: y - 1 }
-                ];
-                for (const adj of adjacentSnapshot) {
-                    if (getStructureAt(adj.x, adj.y) === currentStruct) {
-                         const vKey = getVisitedKey(adj.x, adj.y, false);
-                         if (!visited.has(vKey)) {
-                            visited.add(vKey);
-                            queue.push({ x: adj.x, y: adj.y, isSub: false, path: [...path, adj] });
-                        }
+            // Structure permeability (moving within a building/house)
+            const struct = getStructureAt(x, y);
+            if (struct && !(struct instanceof Roundabout) && !isSub) {
+                const adj = [{x:1,y:0},{x:-1,y:0},{x:0,y:1},{x:0,y:-1},{x:1,y:1},{x:1,y:-1},{x:-1,y:1},{x:-1,y:-1}];
+                for (const offset of adj) {
+                    const nx = x + offset.x, ny = y + offset.y;
+                    if (getStructureAt(nx, ny) === struct) {
+                        addToQueue(nx, ny, false, currentVKey, 1);
                     }
                 }
             }
         }
 
+        if (foundVKey !== -1) {
+            const path: { x: number; y: number }[] = [];
+            let curr: number | null = foundVKey;
+            while (curr !== null) {
+                path.push({ x: (curr >> 11) & 0x3ff, y: (curr >> 1) & 0x3ff });
+                curr = parents.get(curr) ?? null;
+            }
+            path.reverse();
+            if (path.length > 0) path.shift(); // Skip start cell
+            
+            Worker.pathCache.set(cacheKey as any, path);
+            return path;
+        }
+
         return [];
     }
-
 }

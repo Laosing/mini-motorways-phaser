@@ -608,15 +608,35 @@ export class Game extends Scene {
 
                             let spawned = false;
                             const tempWorker = new Worker(this, house);
+                            // Check outbound path
                             if (tempWorker.canReach(loc.x, loc.y, building)) {
-                                tempWorker.setTargetBuilding(building, loc.x, loc.y);
-                                this.workers.push(tempWorker);
-                                assignedPinKeys.add(pinKey);
-                                houseWorkerCounts.set(house, currentCount + 1);
+                                // Save original position to check return path
+                                const originalX = tempWorker.x;
+                                const originalY = tempWorker.y;
                                 
-                                this.lastSpawnTime = time;
-                                house.lastSpawnTime = time;
-                                spawned = true;
+                                // Move worker to building to check return path
+                                tempWorker.setPosition((loc.x + 0.5) * Building.GRID_SIZE, (loc.y + 0.5) * Building.GRID_SIZE);
+                                
+                                const hgx = Math.floor((house.x + house.width / 2) / Building.GRID_SIZE);
+                                const hgy = Math.floor((house.y + house.height / 2) / Building.GRID_SIZE);
+                                
+                                const canReturn = tempWorker.canReach(hgx, hgy, house);
+                                
+                                // Reset position
+                                tempWorker.setPosition(originalX, originalY);
+
+                                if (canReturn) {
+                                    tempWorker.setTargetBuilding(building, loc.x, loc.y);
+                                    this.workers.push(tempWorker);
+                                    assignedPinKeys.add(pinKey);
+                                    houseWorkerCounts.set(house, currentCount + 1);
+                                    
+                                    this.lastSpawnTime = time;
+                                    house.lastSpawnTime = time;
+                                    spawned = true;
+                                } else {
+                                    tempWorker.destroy();
+                                }
                             } else {
                                 tempWorker.destroy(); 
                             }

@@ -45,6 +45,21 @@ export class Building extends GameObjects.Container {
         this.gridY = gridY;
         this.bodyColor = color;
 
+        // Long Shadow
+        const shadowG = scene.add.graphics();
+        shadowG.fillStyle(0x000000, 0.12);
+        const L = 24; // Shadow length (longer for taller buildings)
+        const points = [
+            { x: width, y: 0 },         // Top Right
+            { x: width + L, y: L },     // Projected Top Right
+            { x: width + L, y: height + L }, // Projected Bottom Right
+            { x: L, y: height + L },    // Projected Bottom Left
+            { x: 0, y: height },        // Bottom Left
+            { x: width, y: height }     // Bottom Right
+        ];
+        shadowG.fillPoints(points);
+        this.add(shadowG);
+
         // Main building body (no stroke now)
         const shape = scene.add.rectangle(0, 0, width, height, color);
         shape.setOrigin(0, 0);
@@ -52,8 +67,15 @@ export class Building extends GameObjects.Container {
 
         // Determine entrance directions
         const directions = ["up", "down", "left", "right"] as const;
-        const primaryDir = entranceDir || directions[Math.floor(Math.random() * directions.length)];
-        const opposites: Record<string, "up" | "down" | "left" | "right"> = { up: "down", down: "up", left: "right", right: "left" };
+        const primaryDir =
+            entranceDir ||
+            directions[Math.floor(Math.random() * directions.length)];
+        const opposites: Record<string, "up" | "down" | "left" | "right"> = {
+            up: "down",
+            down: "up",
+            left: "right",
+            right: "left",
+        };
         const finalDirs = [primaryDir, opposites[primaryDir]];
 
         // Custom border graphics
@@ -102,27 +124,53 @@ export class Building extends GameObjects.Container {
         this.add(border);
 
         // Create two doors and two driveways
-        finalDirs.forEach(dir => {
-            let doorX = 16, doorY = height, doorW = 16, doorH = 4;
-            let dStartX = gridX, dStartY = gridY + gridHeight - 1;
-            let dTargetX = gridX, dTargetY = gridY + gridHeight;
+        finalDirs.forEach((dir) => {
+            let doorX = 16,
+                doorY = height,
+                doorW = 16,
+                doorH = 4;
+            let dStartX = gridX,
+                dStartY = gridY + gridHeight - 1;
+            let dTargetX = gridX,
+                dTargetY = gridY + gridHeight;
 
             if (dir === "up") {
-                dStartX = gridX; dStartY = gridY;
-                dTargetX = gridX; dTargetY = gridY - 1;
-                doorX = 16; doorY = 0; doorW = 16; doorH = 4;
+                dStartX = gridX;
+                dStartY = gridY;
+                dTargetX = gridX;
+                dTargetY = gridY - 1;
+                doorX = 16;
+                doorY = 0;
+                doorW = 16;
+                doorH = 4;
             } else if (dir === "left") {
-                dStartX = gridX; dStartY = gridY;
-                dTargetX = gridX - 1; dTargetY = gridY;
-                doorX = 0; doorY = 16; doorW = 4; doorH = 16;
+                dStartX = gridX;
+                dStartY = gridY;
+                dTargetX = gridX - 1;
+                dTargetY = gridY;
+                doorX = 0;
+                doorY = 16;
+                doorW = 4;
+                doorH = 16;
             } else if (dir === "right") {
-                dStartX = gridX + gridWidth - 1; dStartY = gridY;
-                dTargetX = gridX + gridWidth; dTargetY = gridY;
-                doorX = width; doorY = 16; doorW = 4; doorH = 16;
+                dStartX = gridX + gridWidth - 1;
+                dStartY = gridY;
+                dTargetX = gridX + gridWidth;
+                dTargetY = gridY;
+                doorX = width;
+                doorY = 16;
+                doorW = 4;
+                doorH = 16;
             }
             // "down" is the default case initialization above
 
-            const doorSegment = scene.add.rectangle(doorX, doorY, doorW, doorH, color);
+            const doorSegment = scene.add.rectangle(
+                doorX,
+                doorY,
+                doorW,
+                doorH,
+                color,
+            );
             this.add(doorSegment);
 
             // Create automatic entrance path (fixture)
@@ -150,7 +198,7 @@ export class Building extends GameObjects.Container {
     private startPinGeneration() {
         // Spawn a pin every 2 seconds if there is space
         this.scene.time.addEvent({
-            delay: 2000,
+            delay: 5000,
             callback: this.createDemandPin,
             callbackScope: this,
             loop: true,

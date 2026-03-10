@@ -45,6 +45,21 @@ export class House extends GameObjects.Container {
         this.gridY = gridY;
         this.bodyColor = color;
 
+        // Long Shadow
+        const shadowG = scene.add.graphics();
+        shadowG.fillStyle(0x000000, 0.12);
+        const L = 16; // Shadow length
+        const points = [
+            { x: width, y: 0 },         // Top Right
+            { x: width + L, y: L },     // Projected Top Right
+            { x: width + L, y: height + L }, // Projected Bottom Right
+            { x: L, y: height + L },    // Projected Bottom Left
+            { x: 0, y: height },        // Bottom Left
+            { x: width, y: height }     // Bottom Right
+        ];
+        shadowG.fillPoints(points);
+        this.add(shadowG);
+
         // Main building body
         const shape = scene.add.rectangle(0, 0, width, height, color);
         shape.setOrigin(0, 0);
