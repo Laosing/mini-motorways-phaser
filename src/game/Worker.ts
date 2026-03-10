@@ -142,6 +142,8 @@ export class Worker extends GameObjects.Container {
                     ) {
                         this.workerState = WorkerState.COLLECTING_DEMAND;
                         this.pauseTimer = 1.0;
+                        this.setDepth(10);
+                        this.setAlpha(1.0);
 
                         // Collect the specific pin at this location
                         this.targetBuilding.collectDemandAt(
@@ -310,6 +312,9 @@ export class Worker extends GameObjects.Container {
                 this.moveToPoint(offsetNextX, offsetNextY, deltaSeconds, turnMultiplier);
             }
         } else {
+            // Arrived at the final grid cell of the path
+            this.setDepth(10); // Ensure we are on surface
+            this.setAlpha(1.0);
             const targetX = (tX + 0.5) * Building.GRID_SIZE;
             const targetY = (tY + 0.5) * Building.GRID_SIZE;
             if (Phaser.Math.Distance.Between(this.x, this.y, targetX, targetY) > 2) {
